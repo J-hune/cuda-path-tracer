@@ -1,0 +1,42 @@
+{
+   // Général : formatage et hygiène des fichiers à la sauvegarde
+   "editor.formatOnSave": true,
+   "files.insertFinalNewline": true,
+   "files.trimFinalNewlines": true,
+   "files.trimTrailingWhitespace": true,
+
+   "editor.insertSpaces": true,
+   "editor.tabSize": 3,
+   "editor.detectIndentation": false,
+
+   // CMake Tools : configuration et build via CMakePresets.json
+   "cmake.useCMakePresets": "always",
+
+   // clangd : IntelliSense, diagnostics et clang-tidy pour C++ et CUDA
+   "clangd.path": "clangd-22",
+   "clangd.arguments": ["--clang-tidy", "--header-insertion=never"],
+   "nsight.cuda.languageSupport.provider": "clangd",
+   "files.associations": {
+      "*.cu": "cuda-cpp",
+      "*.cuh": "cuda-cpp"
+   },
+
+   "[cpp]": {
+      "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+   },
+   "[c]": {
+      "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+   },
+   "[cuda-cpp]": {
+      "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+   },
+   "[json]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+   },
+   "[jsonc]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+   },
+   "[markdown]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+   }
+}

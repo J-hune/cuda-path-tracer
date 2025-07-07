@@ -1,0 +1,41 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation : 3 espaces, jamais de tabulation
+IndentWidth: 3
+ContinuationIndentWidth: 3
+UseTab: Never
+AccessModifierOffset: -3
+IndentCaseLabels: true
+IndentPPDirectives: AfterHash
+
+# Largeur de ligne (alignée sur ta config Prettier)
+ColumnLimit: 100
+
+# Style
+PointerAlignment: Left
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+AlignAfterOpenBracket: BlockIndent
+AlignEscapedNewlines: Left
+InsertNewlineAtEOF: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+
+# Includes : en-tête du projet, puis CUDA, puis bibliothèque standard
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+   - Regex: '^"'
+     Priority: 1
+   - Regex: '^<cuda'
+     Priority: 2
+   - Regex: '^<.*>'
+     Priority: 3
+...

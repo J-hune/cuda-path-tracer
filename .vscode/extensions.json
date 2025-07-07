@@ -1,0 +1,9 @@
+{
+   "recommendations": [
+      "llvm-vs-code-extensions.vscode-clangd",
+      "nvidia.nsight-vscode-edition",
+      "ms-vscode.cmake-tools",
+      "esbenp.prettier-vscode"
+   ],
+   "unwantedRecommendations": ["ms-vscode.cpptools", "ms-vscode.cpptools-extension-pack"]
+}

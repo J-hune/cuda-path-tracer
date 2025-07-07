@@ -1,0 +1,31 @@
+# Configuration de clangd (IntelliSense + clang-tidy dans l'éditeur).
+# Nécessite clangd >= 22 : les versions antérieures ne savent pas lire les en-têtes de CUDA 13.
+
+# Commandes de compilation exactes générées par CMake (preset debug)
+CompileFlags:
+  CompilationDatabase: build/debug
+
+---
+# Code CUDA : les commandes de compilation sont celles de nvcc, que clang ne comprend pas.
+# On retire les options propres à nvcc et on demande à clang de compiler en mode CUDA.
+# -std est retiré puis remis : clangd l'abandonne en réécrivant la commande nvcc.
+If:
+  PathMatch: [.*\.cu, .*\.cuh, src/gpu/.*\.h]
+CompileFlags:
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - --generate-code*
+    - -rdc*
+    - -Xcompiler*
+    - -G
+    - -lineinfo
+    - --options-file*
+    - -x
+    - -std=*
+  Add:
+    - -xcuda
+    - -std=c++20
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_75
+    # clang 22 annonce officiellement CUDA jusqu'à 12.9 ; CUDA 13.3 fonctionne mais génère cet avertissement
+    - -Wno-unknown-cuda-version
