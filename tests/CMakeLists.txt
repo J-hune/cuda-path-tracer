@@ -10,6 +10,7 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
 add_executable(rt_tests
+   core/test_rng.cpp
    core/test_vec3.cpp
 )
 target_link_libraries(rt_tests PRIVATE core rt_options Catch2::Catch2WithMain)
