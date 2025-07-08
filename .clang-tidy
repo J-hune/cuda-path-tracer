@@ -15,6 +15,14 @@ Checks: >
    readability-implicit-bool-conversion,
    readability-redundant-*,
    cppcoreguidelines-init-variables,
+   cppcoreguidelines-prefer-member-initializer,
+   cppcoreguidelines-special-member-functions,
+   misc-const-correctness,
+   readability-make-member-function-const,
+   readability-convert-member-functions-to-static,
+   readability-else-after-return,
+   readability-inconsistent-declaration-parameter-name,
+   readability-non-const-parameter,
    cppcoreguidelines-pro-type-member-init
 
 # Seuls nos propres en-têtes sont analysés, pas ceux des dépendances

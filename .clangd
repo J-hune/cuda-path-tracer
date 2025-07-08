@@ -5,6 +5,26 @@
 CompileFlags:
   CompilationDatabase: build/debug
 
+# Includes : signale ceux qui manquent (symbole utilisé sans include direct) et ceux qui sont inutiles
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+  # clangd désactive par défaut les règles clang-tidy jugées lentes (dont misc-const-correctness) : on les garde toutes
+  ClangTidy:
+    FastCheckFilter: None
+  # En-têtes internes de CUDA : on n'exige jamais de les inclure directement, <cuda_runtime.h> est l'en-tête public
+  Includes:
+    IgnoreHeader:
+      - cuda_runtime_api\.h
+      - driver_types\.h
+      - vector_types\.h
+      - surface_types\.h
+      - texture_types\.h
+      - cuda_device_runtime_api\.h
+      - device_launch_parameters\.h
+      - crt/.*
+      - __clang_cuda.*\.h
+
 ---
 # Code CUDA : les commandes de compilation sont celles de nvcc, que clang ne comprend pas.
 # On retire les options propres à nvcc et on demande à clang de compiler en mode CUDA.
