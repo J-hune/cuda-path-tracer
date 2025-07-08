@@ -15,6 +15,7 @@ ColumnLimit: 100
 
 # Style
 PointerAlignment: Left
+QualifierAlignment: Left   # const devant le type : const float x
 BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never

@@ -10,6 +10,7 @@ Checks: >
    performance-*,
    modernize-*,
    -modernize-use-trailing-return-type,
+   -modernize-use-designated-initializers,
    -modernize-avoid-c-arrays,
    readability-identifier-naming,
    readability-implicit-bool-conversion,
