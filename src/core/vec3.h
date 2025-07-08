@@ -34,6 +34,10 @@ struct Vec3 {
       const float inv_s = 1.0f / s;
       return *this *= inv_s;
    }
+
+   RT_HOST_DEVICE [[nodiscard]] constexpr bool operator==(Vec3 other) const {
+      return x == other.x && y == other.y && z == other.z;
+   }
 };
 
 RT_HOST_DEVICE constexpr Vec3 operator+(Vec3 a, Vec3 b) {

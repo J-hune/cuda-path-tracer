@@ -12,6 +12,13 @@ void check_near(rt::Vec3 a, rt::Vec3 b, float epsilon = 1e-6f) {
 }
 } // namespace
 
+TEST_CASE("égalité et différence de deux vecteurs", "[vec3]") {
+   STATIC_REQUIRE(rt::Vec3{1, 2, 3} == rt::Vec3{1, 2, 3});
+   STATIC_REQUIRE(rt::Vec3{1, 2, 3} != rt::Vec3{1, 2, 4});
+   STATIC_REQUIRE(rt::Vec3{1, 2, 3} != rt::Vec3{1, 5, 3});
+   STATIC_REQUIRE(rt::Vec3{1, 2, 3} != rt::Vec3{0, 2, 3});
+}
+
 TEST_CASE("addition de deux vecteurs", "[vec3]") {
    const rt::Vec3 a{1, 2, 3};
    const rt::Vec3 b{4, 5, 6};
