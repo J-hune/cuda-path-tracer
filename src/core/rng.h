@@ -14,8 +14,8 @@ public:
       return {seed, pixel_index};
    }
 
-   RT_HOST_DEVICE constexpr Pcg32(std::uint64_t seed, std::uint64_t stream)
-       : inc_((stream << 1u) | 1u) {
+   RT_HOST_DEVICE constexpr Pcg32(std::uint64_t seed, std::uint64_t stream):
+      inc_((stream << 1u) | 1u) {
       step();
       state_ += seed;
       step();
