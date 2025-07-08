@@ -3,6 +3,6 @@
 #include <iostream>
 
 int main() {
-   unsigned int result = hello();
+   unsigned int const result = hello();
    std::cout << result << '\n';
 }

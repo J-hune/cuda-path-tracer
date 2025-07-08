@@ -1,4 +1,7 @@
 #include "gpu/cuda_check.h"
+#include "gpu/device_buffer.h"
+
+#include <cuda_runtime.h>
 
 #include <vector>
 
@@ -11,20 +14,12 @@ unsigned int hello() {
    constexpr int kThreadCount = 32;
 
    std::vector<unsigned int> h_idx(kThreadCount);
-   unsigned int* d_idx = nullptr;
-
-   // On alloue la mémoire sur le GPU pour stocker les indices des threads
-   RT_CUDA_CHECK(cudaMalloc(&d_idx, kThreadCount * sizeof(unsigned int)));
+   DeviceBuffer<unsigned int> d_idx(kThreadCount);
 
    // On lance le kernel avec un bloc de threads
-   write_thread_index<<<1, kThreadCount>>>(d_idx);
+   write_thread_index<<<1, kThreadCount>>>(d_idx.data());
    RT_CUDA_CHECK_LAUNCH();
 
-   RT_CUDA_CHECK(
-      cudaMemcpy(h_idx.data(), d_idx, kThreadCount * sizeof(unsigned int), cudaMemcpyDeviceToHost)
-   );
-
-   RT_CUDA_CHECK(cudaFree(d_idx));
-
+   d_idx.download(h_idx);
    return h_idx.back();
 }

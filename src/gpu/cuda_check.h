@@ -16,7 +16,7 @@ inline void report_cuda_error(cudaError_t error, const char* call, const char* f
 
 #define RT_CUDA_CHECK(call)                                             \
    do {                                                                 \
-      cudaError_t rt_cuda_status_ = (call);                             \
+      const cudaError_t rt_cuda_status_ = (call);                       \
       if (rt_cuda_status_ != cudaSuccess) {                             \
          report_cuda_error(rt_cuda_status_, #call, __FILE__, __LINE__); \
       }                                                                 \
@@ -24,7 +24,7 @@ inline void report_cuda_error(cudaError_t error, const char* call, const char* f
 
 #define RT_CUDA_CHECK_LAUNCH()                                                    \
    do {                                                                           \
-      cudaError_t rt_cuda_status_ = cudaGetLastError();                           \
+      const cudaError_t rt_cuda_status_ = cudaGetLastError();                     \
       if (rt_cuda_status_ != cudaSuccess) {                                       \
          report_cuda_error(rt_cuda_status_, "kernel launch", __FILE__, __LINE__); \
       }                                                                           \
