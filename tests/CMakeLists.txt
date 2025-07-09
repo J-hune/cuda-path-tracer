@@ -14,6 +14,7 @@ add_executable(rt_tests
    core/test_vec3.cpp
    core/test_ray.cpp
    core/test_camera.cpp
+   core/test_triangle.cpp
 )
 target_link_libraries(rt_tests PRIVATE core rt_options Catch2::Catch2WithMain)
 catch_discover_tests(rt_tests)
