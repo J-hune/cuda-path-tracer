@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 4.4)
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
    set(CMAKE_CUDA_ARCHITECTURES 75 CACHE STRING "")
@@ -6,12 +6,15 @@ endif()
 
 project(raytracer LANGUAGES CXX CUDA)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD 23)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
+
+# Pas de modules C++20 dans le projet : pas d'analyse des dépendances de modules
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 add_library(rt_options INTERFACE)
 target_compile_options(rt_options INTERFACE
