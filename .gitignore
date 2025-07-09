@@ -1,2 +1,5 @@
 # Build directories
 build/
+
+# Images produites par le moteur à la racine
+/*.png

@@ -22,7 +22,7 @@ static constexpr float degrees_to_radians(float degrees) {
 
 class Camera {
 public:
-   RT_HOST_DEVICE Camera(const CameraSettings& settings, int width, int height):
+   Camera(const CameraSettings& settings, int width, int height):
       position_(settings.position),
       forward_(normalize(settings.target - settings.position)),
       right_(normalize(cross(forward_, settings.up))),
