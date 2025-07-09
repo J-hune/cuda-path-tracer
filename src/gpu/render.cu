@@ -1,4 +1,6 @@
 #include "core/camera.h"
+#include "core/ray.h"
+#include "core/sky.h"
 #include "core/vec3.h"
 #include "gpu/cuda_check.h"
 #include "gpu/device_buffer.h"
@@ -17,10 +19,10 @@ __global__ void render_kernel(rt::Camera camera, rt::Vec3* image, int width, int
       return;
    }
 
-   const float u = static_cast<float>(x) / static_cast<float>(width);
-   const float v = static_cast<float>(y) / static_cast<float>(height);
-
-   image[y * width + x] = rt::Vec3{u, v, 0.0f};
+   const rt::Ray ray = camera.generate_ray(
+      static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f
+   ); // Le + 0.5 permet de viser le centre du pixel
+   image[y * width + x] = rt::sky_color(ray.direction);
 }
 
 std::vector<rt::Vec3> render(const rt::Camera& camera, int width, int height) {
