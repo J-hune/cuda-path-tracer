@@ -3,3 +3,6 @@ build/
 
 # Images produites par le moteur à la racine
 /*.png
+
+# Scènes Blender et glTF de travail, gardées hors du dépôt
+/scenes/
