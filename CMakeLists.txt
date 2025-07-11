@@ -26,6 +26,7 @@ target_compile_options(rt_options INTERFACE
 
 add_subdirectory(src/core)
 add_subdirectory(src/gpu)
+add_subdirectory(src/scene)
 add_subdirectory(src/app)
 
 option(RT_BUILD_TESTS "Compile les tests unitaires" ON)

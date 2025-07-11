@@ -2,15 +2,32 @@
 #include "core/camera.h"
 #include "core/vec3.h"
 #include "gpu/render.h"
+#include "scene/gltf_loader.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <vector>
 
-int main() {
+int main(int argc, char** argv) {
+   if (argc < 2) {
+      std::cerr << "Usage : " << argv[0] << " <scene.glb>\n";
+      return EXIT_FAILURE;
+   }
+
    constexpr int kWidth = 800;
    constexpr int kHeight = 450;
    const rt::Camera camera(rt::CameraSettings{}, kWidth, kHeight);
+
+   const auto scene = rt::load_gltf(argv[1]);
+   if (!scene) {
+      std::cerr << "Failed to load GLTF file: " << scene.error() << '\n';
+      return EXIT_FAILURE;
+   }
+
+   // On affiche le nombre de sommets et de triangles dans la scène
+   std::cout << "Loaded GLTF file: " << argv[1] << '\n';
+   std::cout << "Number of vertices: " << scene->positions.size() << '\n';
+   std::cout << "Number of triangles: " << scene->indices.size() / 3 << '\n';
 
    const std::vector<rt::Vec3> image = render(camera, kWidth, kHeight);
    if (!write_png("image.png", image, kWidth, kHeight)) {
