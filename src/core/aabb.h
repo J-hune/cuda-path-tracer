@@ -4,22 +4,12 @@
 #include "core/ray.h"
 #include "core/vec3.h"
 
-#include <limits>
-
 namespace rt {
 
 // Boîte englobante alignée sur les axes. Vide par défaut : min = +inf, max = -inf
 struct Aabb {
-   Vec3 min{
-      std::numeric_limits<float>::infinity(),
-      std::numeric_limits<float>::infinity(),
-      std::numeric_limits<float>::infinity()
-   };
-   Vec3 max{
-      -std::numeric_limits<float>::infinity(),
-      -std::numeric_limits<float>::infinity(),
-      -std::numeric_limits<float>::infinity()
-   };
+   Vec3 min{kInfinity, kInfinity, kInfinity};
+   Vec3 max{-kInfinity, -kInfinity, -kInfinity};
 
    RT_HOST_DEVICE constexpr void grow(Vec3 p) {
       min = rt::min(min, p);

@@ -2,6 +2,7 @@
 #include "core/host_device.h"
 
 #include <cmath>
+#include <limits>
 
 namespace rt {
 struct Vec3 {
@@ -39,6 +40,8 @@ struct Vec3 {
       return x == other.x && y == other.y && z == other.z;
    }
 };
+
+inline constexpr float kInfinity = std::numeric_limits<float>::infinity();
 
 RT_HOST_DEVICE constexpr Vec3 operator+(Vec3 a, Vec3 b) {
    return {a.x + b.x, a.y + b.y, a.z + b.z};
