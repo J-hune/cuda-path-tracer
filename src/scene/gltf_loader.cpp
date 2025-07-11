@@ -36,53 +36,82 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
       );
    }
 
-   for (const auto& mesh : asset->meshes) {
-      const std::string mesh_name(mesh.name);
+   if (asset->scenes.empty()) {
+      return std::unexpected("GLTF file " + path.string() + " contains no scene");
+   }
 
-      for (const auto& primitive : mesh.primitives) {
-         if (primitive.type != fastgltf::PrimitiveType::Triangles) {
-            return std::unexpected("Mesh '" + mesh_name + "': primitive is not made of triangles");
+   const std::size_t scene_index = asset->defaultScene.value_or(0);
+   std::string error;
+
+   fastgltf::iterateSceneNodes(
+      asset.get(),
+      scene_index,
+      fastgltf::math::fmat4x4(),
+      [&](fastgltf::Node& node, fastgltf::math::fmat4x4 matrix) {
+         if (!error.empty()) {
+            return;
+         }
+         if (!node.meshIndex.has_value()) {
+            return;
          }
 
-         auto position_attr = primitive.findAttribute("POSITION");
-         if (position_attr == primitive.attributes.end()) {
-            return std::unexpected("Mesh '" + mesh_name + "': primitive has no POSITION attribute");
-         }
+         const auto& mesh = asset->meshes[*node.meshIndex];
+         const std::string mesh_name(mesh.name);
 
-         const auto& pos_accessor = asset->accessors[position_attr->accessorIndex];
-         if (!pos_accessor.bufferViewIndex.has_value()) {
-            return std::unexpected(
-               "Mesh '" + mesh_name + "': POSITION accessor has no buffer view"
-            );
-         }
-
-         auto base = static_cast<std::uint32_t>(scene.positions.size());
-
-         fastgltf::iterateAccessor<fastgltf::math::fvec3>(
-            asset.get(), pos_accessor, [&](fastgltf::math::fvec3 position) {
-               scene.positions.push_back({position.x(), position.y(), position.z()});
-            }
-         );
-
-         if (primitive.indicesAccessor.has_value()) {
-            const auto& idx_accessor = asset->accessors[*primitive.indicesAccessor];
-            if (!idx_accessor.bufferViewIndex.has_value()) {
-               return std::unexpected(
-                  "Mesh '" + mesh_name + "': index accessor has no buffer view"
-               );
+         for (const auto& primitive : mesh.primitives) {
+            if (primitive.type != fastgltf::PrimitiveType::Triangles) {
+               error = "Mesh '" + mesh_name + "': primitive is not made of triangles";
+               return;
             }
 
-            fastgltf::iterateAccessor<std::uint32_t>(
-               asset.get(), idx_accessor, [&](std::uint32_t index) {
-                  scene.indices.push_back(base + index);
+            auto position_attr = primitive.findAttribute("POSITION");
+            if (position_attr == primitive.attributes.end()) {
+               error = "Mesh '" + mesh_name + "': primitive has no POSITION attribute";
+               return;
+            }
+
+            const auto& pos_accessor = asset->accessors[position_attr->accessorIndex];
+            if (!pos_accessor.bufferViewIndex.has_value()) {
+               error = "Mesh '" + mesh_name + "': POSITION accessor has no buffer view";
+               return;
+            }
+
+            const fastgltf::Accessor* idx_accessor = nullptr;
+            if (primitive.indicesAccessor.has_value()) {
+               idx_accessor = &asset->accessors[*primitive.indicesAccessor];
+               if (!idx_accessor->bufferViewIndex.has_value()) {
+                  error = "Mesh '" + mesh_name + "': index accessor has no buffer view";
+                  return;
+               }
+            }
+
+            const auto base = static_cast<std::uint32_t>(scene.positions.size());
+
+            fastgltf::iterateAccessor<fastgltf::math::fvec3>(
+               asset.get(), pos_accessor, [&](fastgltf::math::fvec3 position) {
+                  const auto world =
+                     matrix * fastgltf::math::fvec4(position.x(), position.y(), position.z(), 1.0f);
+                  scene.positions.push_back({world.x(), world.y(), world.z()});
                }
             );
-         } else {
-            for (std::size_t i = 0; i < pos_accessor.count; ++i) {
-               scene.indices.push_back(base + static_cast<std::uint32_t>(i));
+
+            if (idx_accessor != nullptr) {
+               fastgltf::iterateAccessor<std::uint32_t>(
+                  asset.get(), *idx_accessor, [&](std::uint32_t index) {
+                     scene.indices.push_back(base + index);
+                  }
+               );
+            } else {
+               for (std::size_t i = 0; i < pos_accessor.count; ++i) {
+                  scene.indices.push_back(base + static_cast<std::uint32_t>(i));
+               }
             }
          }
       }
+   );
+
+   if (!error.empty()) {
+      return std::unexpected(error);
    }
 
    return scene;
