@@ -1,5 +1,7 @@
 #include "scene/gltf_loader.h"
 
+#include "core/camera.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -8,7 +10,9 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 #include <filesystem>
+#include <numbers>
 #include <string>
+#include <variant>
 
 namespace rt {
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
@@ -51,6 +55,28 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
          if (!error.empty()) {
             return;
          }
+
+         if (node.cameraIndex.has_value() && !scene.camera.has_value()) {
+            // Seule la première caméra de la scène est utilisée
+            const auto& camera = asset->cameras[*node.cameraIndex];
+            const auto* perspective = std::get_if<fastgltf::Camera::Perspective>(&camera.camera);
+            if (perspective == nullptr) {
+               error = "Camera '" + std::string(camera.name) +
+                       "': only perspective cameras are supported";
+               return;
+            }
+
+            const auto position = matrix * fastgltf::math::fvec4(0.f, 0.f, 0.f, 1.f);
+            const auto target = matrix * fastgltf::math::fvec4(0.f, 0.f, -1.f, 1.f);
+            const auto up = matrix * fastgltf::math::fvec4(0.f, 1.f, 0.f, 0.f);
+            scene.camera = CameraSettings{
+               .position = {position.x(), position.y(), position.z()},
+               .target = {target.x(), target.y(), target.z()},
+               .up = {up.x(), up.y(), up.z()},
+               .vertical_fov_degrees = perspective->yfov * 180.f / std::numbers::pi_v<float>
+            };
+         }
+
          if (!node.meshIndex.has_value()) {
             return;
          }

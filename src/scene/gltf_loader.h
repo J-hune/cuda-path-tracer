@@ -1,17 +1,20 @@
 #pragma once
 
+#include "core/camera.h"
 #include "core/vec3.h"
 
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace rt {
 struct Scene {
-   std::vector<rt::Vec3> positions;
+   std::vector<Vec3> positions;
    std::vector<std::uint32_t> indices;
+   std::optional<CameraSettings> camera;
 };
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path);

@@ -16,7 +16,6 @@ int main(int argc, char** argv) {
 
    constexpr int kWidth = 800;
    constexpr int kHeight = 450;
-   const rt::Camera camera(rt::CameraSettings{}, kWidth, kHeight);
 
    const auto scene = rt::load_gltf(argv[1]);
    if (!scene) {
@@ -28,6 +27,8 @@ int main(int argc, char** argv) {
    std::cout << "Loaded GLTF file: " << argv[1] << '\n';
    std::cout << "Number of vertices: " << scene->positions.size() << '\n';
    std::cout << "Number of triangles: " << scene->indices.size() / 3 << '\n';
+
+   const rt::Camera camera(scene->camera.value_or(rt::CameraSettings{}), kWidth, kHeight);
 
    const std::vector<rt::Vec3> image = render(camera, kWidth, kHeight);
    if (!write_png("image.png", image, kWidth, kHeight)) {
