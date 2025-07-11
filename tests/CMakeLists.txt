@@ -13,6 +13,7 @@ add_executable(rt_tests
    core/test_rng.cpp
    core/test_vec3.cpp
    core/test_ray.cpp
+   core/test_aabb.cpp
    core/test_camera.cpp
    core/test_triangle.cpp
 )

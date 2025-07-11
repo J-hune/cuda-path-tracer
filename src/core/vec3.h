@@ -90,5 +90,24 @@ RT_HOST_DEVICE inline Vec3 normalize(Vec3 v) {
    return v / length(v);
 }
 
+// Minimum et maximum composante par composante
+RT_HOST_DEVICE constexpr Vec3 min(Vec3 a, Vec3 b) {
+   return {a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y, a.z < b.z ? a.z : b.z};
+}
+
+RT_HOST_DEVICE constexpr Vec3 max(Vec3 a, Vec3 b) {
+   return {a.x > b.x ? a.x : b.x, a.y > b.y ? a.y : b.y, a.z > b.z ? a.z : b.z};
+}
+
+RT_HOST_DEVICE constexpr float min_component(Vec3 v) {
+   const float xy = v.x < v.y ? v.x : v.y;
+   return xy < v.z ? xy : v.z;
+}
+
+RT_HOST_DEVICE constexpr float max_component(Vec3 v) {
+   const float xy = v.x > v.y ? v.x : v.y;
+   return xy > v.z ? xy : v.z;
+}
+
 static_assert(sizeof(Vec3) == 12);
 } // namespace rt
