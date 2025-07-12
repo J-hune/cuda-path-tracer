@@ -2,6 +2,7 @@
 #include "core/camera.h"
 #include "core/vec3.h"
 #include "gpu/render.h"
+#include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
 #include <cstdlib>
@@ -30,7 +31,8 @@ int main(int argc, char** argv) {
 
    const rt::Camera camera(scene->camera.value_or(rt::CameraSettings{}), kWidth, kHeight);
 
-   const std::vector<rt::Vec3> image = render(camera, kWidth, kHeight);
+   const rt::Bvh bvh = rt::build_bvh(*scene);
+   const std::vector<rt::Vec3> image = render(camera, *scene, bvh, kWidth, kHeight);
    if (!write_png("image.png", image, kWidth, kHeight)) {
       std::cerr << "Failed to write image.png" << '\n';
       return EXIT_FAILURE;
