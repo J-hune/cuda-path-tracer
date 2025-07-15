@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 namespace rt {
 struct Vec3 {
@@ -42,6 +43,8 @@ struct Vec3 {
 };
 
 inline constexpr float kInfinity = std::numeric_limits<float>::infinity();
+
+inline constexpr float kPi = std::numbers::pi_v<float>;
 
 RT_HOST_DEVICE constexpr Vec3 operator+(Vec3 a, Vec3 b) {
    return {a.x + b.x, a.y + b.y, a.z + b.z};

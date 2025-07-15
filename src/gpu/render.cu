@@ -1,6 +1,8 @@
 #include "core/bvh.h"
 #include "core/camera.h"
 #include "core/ray.h"
+#include "core/rng.h"
+#include "core/sampling.h"
 #include "core/scene_view.h"
 #include "core/sky.h"
 #include "core/vec3.h"
@@ -16,33 +18,62 @@
 #include <cstdint>
 #include <vector>
 
+namespace {
+
+constexpr int kSamplesPerPixel = 16;
+constexpr int kMaxBounces = 4;
+constexpr float kAlbedo = 0.8f;
+constexpr float kRayOffset = 1e-3f;
+
+// Normale géométrique du triangle, orientée vers le côté d'où vient le rayon
+__device__ rt::Vec3 facing_normal(rt::SceneView view, std::uint32_t triangle, rt::Vec3 direction) {
+   const rt::Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
+   const rt::Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
+   const rt::Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
+   const rt::Vec3 n = rt::normalize(rt::cross(v1 - v0, v2 - v0));
+   return rt::dot(n, direction) > 0.0f ? -n : n;
+}
+
+// Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte
+__device__ rt::Vec3 trace_path(rt::Ray ray, rt::SceneView view, rt::Pcg32& rng) {
+   rt::Vec3 throughput{1.0f, 1.0f, 1.0f};
+   for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
+      rt::Hit hit{};
+      if (!rt::intersect_scene(ray, view, hit)) {
+         return throughput * rt::sky_color(ray.direction);
+      }
+
+      const rt::Vec3 n = facing_normal(view, hit.triangle, ray.direction);
+      ray = {ray.at(hit.t) + (n * kRayOffset), rt::sample_cosine_hemisphere(n, rng)};
+      throughput *= kAlbedo;
+   }
+   return {0.0f, 0.0f, 0.0f};
+}
+
+} // namespace
+
 __global__ void
 render_kernel(rt::Camera camera, rt::SceneView view, rt::Vec3* image, int width, int height) {
    const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
    const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
-
    if (x >= width || y >= height) {
       return;
    }
 
-   const rt::Ray ray = camera.generate_ray(
-      static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f
-   ); // Le + 0.5 permet de viser le centre du pixel
-
-   rt::Hit hit{};
-   if (intersect_scene(ray, view, hit)) {
-      // On récupère le triangle et on calcule sa normale
-      const rt::Vec3 v0 = view.positions[view.indices[hit.triangle * 3 + 0]];
-      const rt::Vec3 v1 = view.positions[view.indices[hit.triangle * 3 + 1]];
-      const rt::Vec3 v2 = view.positions[view.indices[hit.triangle * 3 + 2]];
-      const rt::Vec3 n = rt::normalize(rt::cross(v1 - v0, v2 - v0));
-
-      // On calcule la couleur en fonction de la normale
-      image[y * width + x] = 0.5f * (n + rt::Vec3{1.0f, 1.0f, 1.0f});
-      return;
+   const auto pixel_index = static_cast<std::uint32_t>((y * width) + x);
+   rt::Vec3 color{0.0f, 0.0f, 0.0f};
+   for (int sample = 0; sample < kSamplesPerPixel; ++sample) {
+      rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(pixel_index, static_cast<std::uint32_t>(sample));
+      const float jitter_x = rng.next_float();
+      const float jitter_y = rng.next_float();
+      const rt::Ray ray = camera.generate_ray(
+         static_cast<float>(x) + jitter_x,
+         static_cast<float>(y) + jitter_y
+      );
+      color += trace_path(ray, view, rng);
    }
 
-   image[y * width + x] = rt::sky_color(ray.direction);
+   image[pixel_index] = color / static_cast<float>(kSamplesPerPixel);
 }
 
 std::vector<rt::Vec3> render(
@@ -64,7 +95,10 @@ std::vector<rt::Vec3> render(
    scene_indices.upload(scene.indices);
 
    const rt::SceneView view{
-      bvh_nodes.data(), bvh_triangle_indices.data(), scene_positions.data(), scene_indices.data()
+      bvh_nodes.data(),
+      bvh_triangle_indices.data(),
+      scene_positions.data(),
+      scene_indices.data()
    };
 
    render_kernel<<<grid, block>>>(camera, view, image.data(), width, height);
