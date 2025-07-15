@@ -1,5 +1,6 @@
 #include "core/bvh.h"
 #include "core/camera.h"
+#include "core/material.h"
 #include "core/ray.h"
 #include "core/rng.h"
 #include "core/sampling.h"
@@ -22,7 +23,6 @@ namespace {
 
 constexpr int kSamplesPerPixel = 16;
 constexpr int kMaxBounces = 4;
-constexpr float kAlbedo = 0.8f;
 constexpr float kRayOffset = 1e-3f;
 
 // Normale géométrique du triangle, orientée vers le côté d'où vient le rayon
@@ -36,18 +36,25 @@ __device__ rt::Vec3 facing_normal(rt::SceneView view, std::uint32_t triangle, rt
 
 // Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte
 __device__ rt::Vec3 trace_path(rt::Ray ray, rt::SceneView view, rt::Pcg32& rng) {
+   rt::Vec3 radiance{0.0f, 0.0f, 0.0f};
    rt::Vec3 throughput{1.0f, 1.0f, 1.0f};
+
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       rt::Hit hit{};
       if (!rt::intersect_scene(ray, view, hit)) {
-         return throughput * rt::sky_color(ray.direction);
+         radiance += throughput * rt::sky_color(ray.direction);
+         return radiance;
       }
+
+      const rt::Material material = view.materials[view.material_indices[hit.triangle]];
+      radiance += throughput * material.emission;
+      throughput = throughput * material.albedo;
 
       const rt::Vec3 n = facing_normal(view, hit.triangle, ray.direction);
       ray = {ray.at(hit.t) + (n * kRayOffset), rt::sample_cosine_hemisphere(n, rng)};
-      throughput *= kAlbedo;
    }
-   return {0.0f, 0.0f, 0.0f};
+
+   return radiance;
 }
 
 } // namespace
@@ -88,17 +95,23 @@ std::vector<rt::Vec3> render(
    DeviceBuffer<std::uint32_t> bvh_triangle_indices(bvh.triangle_indices.size());
    DeviceBuffer<rt::Vec3> scene_positions(scene.positions.size());
    DeviceBuffer<std::uint32_t> scene_indices(scene.indices.size());
+   DeviceBuffer<rt::Material> scene_materials(scene.materials.size());
+   DeviceBuffer<std::uint32_t> scene_material_indices(scene.material_indices.size());
 
    bvh_nodes.upload(bvh.nodes);
    bvh_triangle_indices.upload(bvh.triangle_indices);
    scene_positions.upload(scene.positions);
    scene_indices.upload(scene.indices);
+   scene_materials.upload(scene.materials);
+   scene_material_indices.upload(scene.material_indices);
 
    const rt::SceneView view{
       bvh_nodes.data(),
       bvh_triangle_indices.data(),
       scene_positions.data(),
-      scene_indices.data()
+      scene_indices.data(),
+      scene_materials.data(),
+      scene_material_indices.data()
    };
 
    render_kernel<<<grid, block>>>(camera, view, image.data(), width, height);

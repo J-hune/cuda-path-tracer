@@ -3,6 +3,7 @@
 #include "core/aabb.h"
 #include "core/bvh.h"
 #include "core/host_device.h"
+#include "core/material.h"
 #include "core/ray.h"
 #include "core/triangle.h"
 #include "core/vec3.h"
@@ -16,6 +17,8 @@ struct SceneView {
    const std::uint32_t* triangle_indices;
    const Vec3* positions;
    const std::uint32_t* indices;
+   const Material* materials;
+   const std::uint32_t* material_indices;
 };
 
 struct Hit {
