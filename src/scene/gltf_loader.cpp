@@ -31,8 +31,11 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
       );
    }
 
-   auto asset =
-      parser.loadGltf(data.get(), path.parent_path(), fastgltf::Options::LoadExternalBuffers);
+   auto asset = parser.loadGltf(
+      data.get(),
+      path.parent_path(),
+      fastgltf::Options::LoadExternalBuffers
+   );
    if (auto error = asset.error(); error != fastgltf::Error::None) {
       return std::unexpected(
          "Failed to parse GLTF file " + path.string() + ": " +
@@ -114,18 +117,24 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
             const auto base = static_cast<std::uint32_t>(scene.positions.size());
 
             fastgltf::iterateAccessor<fastgltf::math::fvec3>(
-               asset.get(), pos_accessor, [&](fastgltf::math::fvec3 position) {
-                  const auto world =
-                     matrix * fastgltf::math::fvec4(position.x(), position.y(), position.z(), 1.0f);
+               asset.get(),
+               pos_accessor,
+               [&](fastgltf::math::fvec3 position) {
+                  const auto world = matrix * fastgltf::math::fvec4(
+                                                 position.x(),
+                                                 position.y(),
+                                                 position.z(),
+                                                 1.0f
+                                              );
                   scene.positions.push_back({world.x(), world.y(), world.z()});
                }
             );
 
             if (idx_accessor != nullptr) {
                fastgltf::iterateAccessor<std::uint32_t>(
-                  asset.get(), *idx_accessor, [&](std::uint32_t index) {
-                     scene.indices.push_back(base + index);
-                  }
+                  asset.get(),
+                  *idx_accessor,
+                  [&](std::uint32_t index) { scene.indices.push_back(base + index); }
                );
             } else {
                for (std::size_t i = 0; i < pos_accessor.count; ++i) {

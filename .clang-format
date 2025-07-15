@@ -29,6 +29,8 @@ BreakConstructorInitializers: AfterColon
 PackConstructorInitializers: Never
 ConstructorInitializerIndentWidth: 3
 SpaceBeforeCtorInitializerColon: false
+PenaltyBreakAssignment: 1000
+AllowAllArgumentsOnNextLine: false
 InsertNewlineAtEOF: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1

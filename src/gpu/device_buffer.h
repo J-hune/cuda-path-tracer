@@ -12,7 +12,8 @@
 template <typename T>
 class DeviceBuffer {
 public:
-   explicit DeviceBuffer(std::size_t size) : size_(size) {
+   explicit DeviceBuffer(std::size_t size):
+      size_(size) {
       RT_CUDA_CHECK(cudaMalloc(&ptr_, size * sizeof(T)));
    }
 
@@ -22,8 +23,9 @@ public:
    DeviceBuffer(const DeviceBuffer&) = delete;
    DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
-   DeviceBuffer(DeviceBuffer&& other) noexcept
-       : ptr_(std::exchange(other.ptr_, nullptr)), size_(std::exchange(other.size_, 0)) {}
+   DeviceBuffer(DeviceBuffer&& other) noexcept:
+      ptr_(std::exchange(other.ptr_, nullptr)),
+      size_(std::exchange(other.size_, 0)) {}
 
    DeviceBuffer& operator=(DeviceBuffer&& other) noexcept {
       if (this != &other) {

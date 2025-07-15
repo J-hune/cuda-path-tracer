@@ -35,8 +35,9 @@ public:
    [[nodiscard]] RT_HOST_DEVICE Ray generate_ray(float x, float y) const {
       const float sx = 2.f * x * inv_width_ - 1.f;
       const float sy = 1.f - 2.f * y * inv_height_;
-      const Vec3 direction =
-         normalize(forward_ + sx * half_width_ * right_ + sy * half_height_ * up_);
+      const Vec3 direction = normalize(
+         forward_ + sx * half_width_ * right_ + sy * half_height_ * up_
+      );
       return {position_, direction};
    }
 

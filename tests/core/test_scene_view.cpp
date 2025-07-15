@@ -93,9 +93,8 @@ TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[s
 }
 
 TEST_CASE("intersect_scene sur une scène vide", "[scene_view]") {
-   const rt::SceneView view{
-      .nodes = nullptr, .triangle_indices = nullptr, .positions = nullptr, .indices = nullptr
-   };
+   const rt::SceneView
+      view{.nodes = nullptr, .triangle_indices = nullptr, .positions = nullptr, .indices = nullptr};
    rt::Hit hit{};
    CHECK_FALSE(rt::intersect_scene({{0, 0, 0}, {0, 0, -1}}, view, hit));
 }

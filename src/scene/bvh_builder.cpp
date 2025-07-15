@@ -99,8 +99,8 @@ Bvh build_bvh(const Scene& scene) {
 
    ctx.centroids.reserve(triangle_count);
    for (std::uint32_t triangle = 0; triangle < triangle_count; ++triangle) {
-      const Vec3 sum =
-         vertex(scene, triangle, 0) + vertex(scene, triangle, 1) + vertex(scene, triangle, 2);
+      const Vec3 sum = vertex(scene, triangle, 0) + vertex(scene, triangle, 1) +
+                       vertex(scene, triangle, 2);
       ctx.centroids.push_back(sum / 3.f);
    }
 
