@@ -13,7 +13,8 @@
 
 namespace rt {
 
-inline constexpr int kMaxBounces = 4;
+inline constexpr int kRouletteStart = 3;
+inline constexpr int kMaxBounces = 64;
 inline constexpr float kRayOffset = 1e-3f;
 
 // Normale géométrique du triangle, orientée vers le côté d'où vient le rayon
@@ -96,6 +97,14 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
       const Vec3 direct = direct_light(view, point, n, material.albedo, rng);
       radiance += throughput * direct;
       throughput = throughput * material.albedo;
+
+      if (bounce >= kRouletteStart) {
+         const float p = std::fmin(max_component(throughput), 0.95f);
+         if (rng.next_float() >= p) {
+            return radiance;
+         }
+         throughput /= p;
+      }
 
       ray = {point + (n * kRayOffset), sample_cosine_hemisphere(n, rng)};
    }
