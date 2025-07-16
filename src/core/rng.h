@@ -8,8 +8,10 @@ namespace rt {
 // Référence : https://www.pcg-random.org
 class Pcg32 {
 public:
-   RT_HOST_DEVICE static constexpr Pcg32
-   make_pixel_rng(std::uint32_t pixel_index, std::uint32_t sample_index) {
+   RT_HOST_DEVICE static constexpr Pcg32 make_pixel_rng(
+      std::uint32_t pixel_index,
+      std::uint32_t sample_index
+   ) {
       const std::uint64_t seed = mix64((std::uint64_t{pixel_index} << 32u) | sample_index);
       return {seed, pixel_index};
    }

@@ -8,9 +8,8 @@
 
 namespace {
 // Sorties du programme de démonstration officiel de PCG32 pour la graine 42 et le flux 54
-constexpr std::array<std::uint32_t, 6> kReferenceOutputs{
-   0xa15c02b7u, 0x7b47f409u, 0xba1d3330u, 0x83d2f293u, 0xbfa4784bu, 0xcbed606eu
-};
+constexpr std::array<std::uint32_t, 6>
+   kReferenceOutputs{0xa15c02b7u, 0x7b47f409u, 0xba1d3330u, 0x83d2f293u, 0xbfa4784bu, 0xcbed606eu};
 
 constexpr bool matches_reference() {
    rt::Pcg32 rng(42, 54);

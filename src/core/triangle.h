@@ -14,8 +14,13 @@ struct TriangleHit {
 };
 
 // Intersection rayon-triangle de Möller-Trumbore
-RT_HOST_DEVICE constexpr bool
-intersect_triangle(Ray ray, Vec3 v0, Vec3 v1, Vec3 v2, TriangleHit& hit) {
+RT_HOST_DEVICE constexpr bool intersect_triangle(
+   Ray ray,
+   Vec3 v0,
+   Vec3 v1,
+   Vec3 v2,
+   TriangleHit& hit
+) {
    constexpr float kEpsilon = 1e-8f;
 
    const Vec3 edge1 = v1 - v0;

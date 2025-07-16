@@ -7,5 +7,10 @@
 
 #include <vector>
 
-std::vector<rt::Vec3>
-render(const rt::Camera& camera, const rt::Scene& scene, const rt::Bvh& bvh, int width, int height);
+std::vector<rt::Vec3> render(
+   const rt::Camera& camera,
+   const rt::Scene& scene,
+   const rt::Bvh& bvh,
+   int width,
+   int height
+);

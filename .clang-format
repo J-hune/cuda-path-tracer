@@ -31,6 +31,8 @@ ConstructorInitializerIndentWidth: 3
 SpaceBeforeCtorInitializerColon: false
 PenaltyBreakAssignment: 1000
 AllowAllArgumentsOnNextLine: false
+PenaltyReturnTypeOnItsOwnLine: 1000
+AllowAllParametersOfDeclarationOnNextLine: false
 InsertNewlineAtEOF: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1
