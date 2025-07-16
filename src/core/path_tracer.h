@@ -6,6 +6,8 @@
 #include "core/rng.h"
 #include "core/sampling.h"
 #include "core/scene_view.h"
+#include "core/texture.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 
 #include <cmath>
@@ -76,6 +78,27 @@ RT_HOST_DEVICE inline Vec3 direct_light(SceneView view, Vec3 x, Vec3 n, Vec3 alb
    return (albedo / kPi) * material.emission * (geometry * inverse_pdf);
 }
 
+// Coordonnées de texture au point touché, interpolées entre les trois sommets
+RT_HOST_DEVICE inline Vec2 interpolate_uv(SceneView view, const Hit& hit) {
+   const Vec2 uv0 = view.uvs[view.indices[(3 * hit.triangle) + 0]];
+   const Vec2 uv1 = view.uvs[view.indices[(3 * hit.triangle) + 1]];
+   const Vec2 uv2 = view.uvs[view.indices[(3 * hit.triangle) + 2]];
+   return ((1.0f - hit.u - hit.v) * uv0) + (hit.u * uv1) + (hit.v * uv2);
+}
+
+// Albédo du matériau au point touché : couleur de base, multipliée par la texture s'il y en a une
+RT_HOST_DEVICE inline Vec3 surface_albedo(
+   SceneView view,
+   const Material& material,
+   const Hit& hit
+) {
+   if (material.base_color_texture < 0) {
+      return material.albedo;
+   }
+   const Texture texture = view.textures[material.base_color_texture];
+   return material.albedo * sample_texture(texture, view.texels, interpolate_uv(view, hit));
+}
+
 // Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte
 RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
    Vec3 radiance{0.0f, 0.0f, 0.0f};
@@ -94,9 +117,10 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
       }
       const Vec3 point = ray.at(hit.t);
       const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
-      const Vec3 direct = direct_light(view, point, n, material.albedo, rng);
+      const Vec3 albedo = surface_albedo(view, material, hit);
+      const Vec3 direct = direct_light(view, point, n, albedo, rng);
       radiance += throughput * direct;
-      throughput = throughput * material.albedo;
+      throughput = throughput * albedo;
 
       if (bounce >= kRouletteStart) {
          const float p = std::fmin(max_component(throughput), 0.95f);

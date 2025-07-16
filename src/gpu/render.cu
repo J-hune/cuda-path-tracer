@@ -5,6 +5,8 @@
 #include "core/ray.h"
 #include "core/rng.h"
 #include "core/scene_view.h"
+#include "core/texture.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 #include "gpu/cuda_check.h"
 #include "gpu/device_buffer.h"
@@ -72,6 +74,9 @@ std::vector<rt::Vec3> render(
    DeviceBuffer<rt::Material> scene_materials(scene.materials.size());
    DeviceBuffer<std::uint32_t> scene_material_indices(scene.material_indices.size());
    DeviceBuffer<std::uint32_t> scene_emissive_triangles(scene.emissive_triangles.size());
+   DeviceBuffer<rt::Vec2> scene_uvs(scene.uvs.size());
+   DeviceBuffer<rt::Texture> scene_textures(scene.textures.size());
+   DeviceBuffer<rt::Vec3> scene_texels(scene.texels.size());
 
    bvh_nodes.upload(bvh.nodes);
    bvh_triangle_indices.upload(bvh.triangle_indices);
@@ -80,6 +85,9 @@ std::vector<rt::Vec3> render(
    scene_materials.upload(scene.materials);
    scene_material_indices.upload(scene.material_indices);
    scene_emissive_triangles.upload(scene.emissive_triangles);
+   scene_uvs.upload(scene.uvs);
+   scene_textures.upload(scene.textures);
+   scene_texels.upload(scene.texels);
 
    const rt::SceneView view{
       .nodes = bvh_nodes.data(),
@@ -90,6 +98,9 @@ std::vector<rt::Vec3> render(
       .material_indices = scene_material_indices.data(),
       .emissive_triangles = scene_emissive_triangles.data(),
       .emissive_triangle_count = static_cast<std::uint32_t>(scene.emissive_triangles.size()),
+      .uvs = scene_uvs.data(),
+      .textures = scene_textures.data(),
+      .texels = scene_texels.data(),
       .environment = scene.environment,
    };
 

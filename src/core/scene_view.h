@@ -6,7 +6,9 @@
 #include "core/host_device.h"
 #include "core/material.h"
 #include "core/ray.h"
+#include "core/texture.h"
 #include "core/triangle.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 
 #include <cstdint>
@@ -22,6 +24,9 @@ struct SceneView {
    const std::uint32_t* material_indices = nullptr;
    const std::uint32_t* emissive_triangles = nullptr;
    std::uint32_t emissive_triangle_count = 0;
+   const Vec2* uvs = nullptr;
+   const Texture* textures = nullptr;
+   const Vec3* texels = nullptr;
    Environment environment;
 };
 
