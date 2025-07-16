@@ -2,6 +2,7 @@
 
 #include "core/aabb.h"
 #include "core/bvh.h"
+#include "core/environment.h"
 #include "core/host_device.h"
 #include "core/material.h"
 #include "core/ray.h"
@@ -13,14 +14,15 @@
 namespace rt {
 
 struct SceneView {
-   const BvhNode* nodes;
-   const std::uint32_t* triangle_indices;
-   const Vec3* positions;
-   const std::uint32_t* indices;
-   const Material* materials;
-   const std::uint32_t* material_indices;
-   const std::uint32_t* emissive_triangles;
-   std::uint32_t emissive_triangle_count;
+   const BvhNode* nodes = nullptr;
+   const std::uint32_t* triangle_indices = nullptr;
+   const Vec3* positions = nullptr;
+   const std::uint32_t* indices = nullptr;
+   const Material* materials = nullptr;
+   const std::uint32_t* material_indices = nullptr;
+   const std::uint32_t* emissive_triangles = nullptr;
+   std::uint32_t emissive_triangle_count = 0;
+   Environment environment;
 };
 
 struct Hit {

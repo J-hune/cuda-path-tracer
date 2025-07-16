@@ -70,7 +70,8 @@ TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[s
       .materials = nullptr,
       .material_indices = nullptr,
       .emissive_triangles = nullptr,
-      .emissive_triangle_count = 0
+      .emissive_triangle_count = 0,
+      .environment = {}
    };
 
    int hit_count = 0;
@@ -105,7 +106,8 @@ TEST_CASE("intersect_scene sur une scène vide", "[scene_view]") {
       .materials = nullptr,
       .material_indices = nullptr,
       .emissive_triangles = nullptr,
-      .emissive_triangle_count = 0
+      .emissive_triangle_count = 0,
+      .environment = {}
    };
    rt::Hit hit{};
    CHECK_FALSE(rt::intersect_scene({{0, 0, 0}, {0, 0, -1}}, view, hit));

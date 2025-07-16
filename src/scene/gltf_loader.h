@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/camera.h"
+#include "core/environment.h"
 #include "core/material.h"
 #include "core/vec3.h"
 
@@ -19,6 +20,7 @@ struct Scene {
    std::vector<Material> materials;
    std::vector<std::uint32_t> material_indices;
    std::vector<std::uint32_t> emissive_triangles;
+   Environment environment;
 };
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path);
