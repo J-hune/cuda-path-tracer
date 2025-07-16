@@ -3,6 +3,8 @@
 #include "core/camera.h"
 #include "core/environment.h"
 #include "core/material.h"
+#include "core/texture.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 
 #include <cstdint>
@@ -15,11 +17,14 @@
 namespace rt {
 struct Scene {
    std::vector<Vec3> positions;
+   std::vector<Vec2> uvs;
    std::vector<std::uint32_t> indices;
    std::optional<CameraSettings> camera;
    std::vector<Material> materials;
    std::vector<std::uint32_t> material_indices;
    std::vector<std::uint32_t> emissive_triangles;
+   std::vector<Texture> textures;
+   std::vector<Vec3> texels;
    Environment environment;
 };
 

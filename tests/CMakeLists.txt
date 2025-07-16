@@ -15,6 +15,7 @@ add_executable(rt_tests
    core/test_ray.cpp
    core/test_aabb.cpp
    core/test_camera.cpp
+   core/test_color.cpp
    core/test_furnace.cpp
    core/test_sampling.cpp
    core/test_scene_view.cpp

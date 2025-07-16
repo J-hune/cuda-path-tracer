@@ -9,5 +9,5 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(fastgltf)
 
 # Chargement et représentation hôte de la scène (CPU uniquement)
-add_library(scene STATIC gltf_loader.cpp bvh_builder.cpp)
-target_link_libraries(scene PUBLIC core PRIVATE fastgltf::fastgltf rt_options)
+add_library(scene STATIC gltf_loader.cpp bvh_builder.cpp stb_image.cpp)
+target_link_libraries(scene PUBLIC core PRIVATE fastgltf::fastgltf stb rt_options)

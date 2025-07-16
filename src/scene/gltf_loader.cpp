@@ -1,7 +1,9 @@
 #include "scene/gltf_loader.h"
 
 #include "core/camera.h"
+#include "core/color.h"
 #include "core/material.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 
 #include <cstddef>
@@ -13,7 +15,11 @@
 #include <fastgltf/types.hpp>
 #include <filesystem>
 #include <numbers>
+#include <span>
+#include <stb_image.h>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -62,19 +68,107 @@ std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::pa
 }
 
 // Matériaux du fichier, suivis d'un matériau par défaut pour les primitives qui n'en ont pas
-std::vector<Material> load_materials(const fastgltf::Asset& asset) {
+std::expected<std::vector<Material>, std::string> load_materials(const fastgltf::Asset& asset) {
    std::vector<Material> materials;
    for (const auto& material : asset.materials) {
       const auto& base_color = material.pbrData.baseColorFactor;
       const auto& emissive = material.emissiveFactor;
       const float strength = material.emissiveStrength;
+
+      std::int32_t texture = -1;
+      if (material.pbrData.baseColorTexture.has_value()) {
+         const auto& info = *material.pbrData.baseColorTexture;
+         if (info.texCoordIndex != 0) {
+            return std::unexpected(
+               "Material '" + std::string(material.name) + "': only TEXCOORD_0 is supported"
+            );
+         }
+         texture = static_cast<std::int32_t>(info.textureIndex);
+      }
+
       materials.push_back({
          .albedo = {base_color.x(), base_color.y(), base_color.z()},
          .emission = {emissive.x() * strength, emissive.y() * strength, emissive.z() * strength},
+         .base_color_texture = texture,
       });
    }
    materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});
    return materials;
+}
+
+// Octets encodés (PNG, JPEG…) d'une image, qu'elle soit dans un buffer ou intégrée directement
+std::expected<std::span<const std::byte>, std::string> image_bytes(
+   const fastgltf::Asset& asset,
+   const fastgltf::Image& image
+) {
+   const auto bytes_of =
+      [](const auto& source) -> std::expected<std::span<const std::byte>, std::string> {
+      using Source = std::decay_t<decltype(source)>;
+      if constexpr (std::is_same_v<Source, fastgltf::sources::Array> ||
+                    std::is_same_v<Source, fastgltf::sources::Vector>) {
+         return std::span<const std::byte>(source.bytes.data(), source.bytes.size());
+      } else if constexpr (std::is_same_v<Source, fastgltf::sources::ByteView>) {
+         return std::span<const std::byte>(source.bytes);
+      } else {
+         return std::unexpected(std::string("unsupported image data source"));
+      }
+   };
+
+   if (const auto* view = std::get_if<fastgltf::sources::BufferView>(&image.data)) {
+      const auto& buffer_view = asset.bufferViews[view->bufferViewIndex];
+      const auto buffer = std::visit(bytes_of, asset.buffers[buffer_view.bufferIndex].data);
+      if (!buffer) {
+         return std::unexpected(buffer.error());
+      }
+      return buffer->subspan(buffer_view.byteOffset, buffer_view.byteLength);
+   }
+   return std::visit(bytes_of, image.data);
+}
+
+// Décode toutes les textures en RGB linéaire, mises bout à bout dans scene.texels
+std::expected<void, std::string> load_textures(const fastgltf::Asset& asset, Scene& scene) {
+   for (const auto& texture : asset.textures) {
+      if (!texture.imageIndex.has_value()) {
+         return std::unexpected("Texture '" + std::string(texture.name) + "' has no image");
+      }
+      const auto& image = asset.images[*texture.imageIndex];
+      const std::string image_name(image.name);
+
+      const auto bytes = image_bytes(asset, image);
+      if (!bytes) {
+         return std::unexpected("Image '" + image_name + "': " + bytes.error());
+      }
+
+      int width = 0;
+      int height = 0;
+      int channels = 0;
+      stbi_uc* pixels = stbi_load_from_memory(
+         reinterpret_cast<const stbi_uc*>(bytes->data()),
+         static_cast<int>(bytes->size()),
+         &width,
+         &height,
+         &channels,
+         3
+      );
+      if (pixels == nullptr) {
+         return std::unexpected("Image '" + image_name + "': " + stbi_failure_reason());
+      }
+
+      scene.textures.push_back({
+         .offset = static_cast<std::uint32_t>(scene.texels.size()),
+         .width = static_cast<std::uint32_t>(width),
+         .height = static_cast<std::uint32_t>(height),
+      });
+      const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+      for (std::size_t i = 0; i < pixel_count; ++i) {
+         const auto channel = [&](std::size_t c) {
+            return srgb_to_linear(static_cast<float>(pixels[(3 * i) + c]) / 255.f);
+         };
+         scene.texels.push_back({channel(0), channel(1), channel(2)});
+      }
+      stbi_image_free(pixels);
+   }
+   return {};
 }
 
 // Caméra glTF : regarde vers -z dans son repère local, haut selon +y
@@ -96,7 +190,24 @@ std::expected<CameraSettings, std::string> load_camera(
    };
 }
 
-// Ajoute les sommets (en coordonnées monde), les indices et les matériaux d'une primitive
+// Accesseur d'un attribut de sommet, vérifié ; nullptr si la primitive n'a pas cet attribut
+std::expected<const fastgltf::Accessor*, std::string> find_attribute(
+   const fastgltf::Asset& asset,
+   const fastgltf::Primitive& primitive,
+   std::string_view name
+) {
+   const auto attribute = primitive.findAttribute(name);
+   if (attribute == primitive.attributes.end()) {
+      return nullptr;
+   }
+   const auto& accessor = asset.accessors[attribute->accessorIndex];
+   if (!accessor.bufferViewIndex.has_value()) {
+      return std::unexpected(std::string(name) + " accessor has no buffer view");
+   }
+   return &accessor;
+}
+
+// Ajoute les sommets (en coordonnées monde), les UV, les indices et les matériaux d'une primitive
 std::expected<void, std::string> load_primitive(
    const fastgltf::Asset& asset,
    const fastgltf::Primitive& primitive,
@@ -104,51 +215,67 @@ std::expected<void, std::string> load_primitive(
    std::uint32_t default_material,
    Scene& scene
 ) {
+   // 1. Vérifications : rien n'est ajouté à la scène si la primitive est invalide
    if (primitive.type != fastgltf::PrimitiveType::Triangles) {
       return std::unexpected("primitive is not made of triangles");
    }
 
-   const auto position_attribute = primitive.findAttribute("POSITION");
-   if (position_attribute == primitive.attributes.end()) {
+   const auto positions = find_attribute(asset, primitive, "POSITION");
+   if (!positions) {
+      return std::unexpected(positions.error());
+   }
+   if (*positions == nullptr) {
       return std::unexpected("primitive has no POSITION attribute");
    }
-   const auto& position_accessor = asset.accessors[position_attribute->accessorIndex];
-   if (!position_accessor.bufferViewIndex.has_value()) {
-      return std::unexpected("POSITION accessor has no buffer view");
+   const std::size_t vertex_count = (*positions)->count;
+
+   const auto uvs = find_attribute(asset, primitive, "TEXCOORD_0");
+   if (!uvs) {
+      return std::unexpected(uvs.error());
+   }
+   if (*uvs != nullptr && (*uvs)->count != vertex_count) {
+      return std::unexpected("TEXCOORD_0 and POSITION have different counts");
    }
 
-   const fastgltf::Accessor* index_accessor = nullptr;
+   const fastgltf::Accessor* indices = nullptr;
    if (primitive.indicesAccessor.has_value()) {
-      index_accessor = &asset.accessors[*primitive.indicesAccessor];
-      if (!index_accessor->bufferViewIndex.has_value()) {
+      indices = &asset.accessors[*primitive.indicesAccessor];
+      if (!indices->bufferViewIndex.has_value()) {
          return std::unexpected("index accessor has no buffer view");
       }
    }
+   const std::size_t index_count = indices != nullptr ? indices->count : vertex_count;
+   if (index_count % 3 != 0) {
+      return std::unexpected("index count is not a multiple of 3");
+   }
 
+   // 2. Ajout à la scène
    const auto base = static_cast<std::uint32_t>(scene.positions.size());
-   const std::size_t first_index = scene.indices.size();
 
    fastgltf::iterateAccessor<fastgltf::math::fvec3>(
       asset,
-      position_accessor,
+      **positions,
       [&](fastgltf::math::fvec3 p) {
          scene.positions.push_back(transform(matrix, p.x(), p.y(), p.z(), 1.f));
       }
    );
 
-   if (index_accessor != nullptr) {
-      fastgltf::iterateAccessor<std::uint32_t>(asset, *index_accessor, [&](std::uint32_t index) {
+   if (*uvs != nullptr) {
+      fastgltf::iterateAccessor<fastgltf::math::fvec2>(asset, **uvs, [&](fastgltf::math::fvec2 uv) {
+         scene.uvs.push_back({uv.x(), uv.y()});
+      });
+   } else {
+      scene.uvs.insert(scene.uvs.end(), vertex_count, Vec2{0.f, 0.f});
+   }
+
+   if (indices != nullptr) {
+      fastgltf::iterateAccessor<std::uint32_t>(asset, *indices, [&](std::uint32_t index) {
          scene.indices.push_back(base + index);
       });
    } else {
-      for (std::size_t i = 0; i < position_accessor.count; ++i) {
+      for (std::size_t i = 0; i < vertex_count; ++i) {
          scene.indices.push_back(base + static_cast<std::uint32_t>(i));
       }
-   }
-
-   const std::size_t index_count = scene.indices.size() - first_index;
-   if (index_count % 3 != 0) {
-      return std::unexpected("index count is not a multiple of 3");
    }
 
    const std::uint32_t material_index = primitive.materialIndex.has_value()
@@ -168,7 +295,14 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
    const fastgltf::Asset& asset = *parsed;
 
    Scene scene;
-   scene.materials = load_materials(asset);
+   auto materials = load_materials(asset);
+   if (!materials) {
+      return std::unexpected(materials.error());
+   }
+   scene.materials = std::move(*materials);
+   if (auto textures = load_textures(asset, scene); !textures) {
+      return std::unexpected(textures.error());
+   }
    const auto default_material = static_cast<std::uint32_t>(scene.materials.size() - 1);
 
    // iterateSceneNodes prend un lambda : on garde la première erreur pour la renvoyer ensuite

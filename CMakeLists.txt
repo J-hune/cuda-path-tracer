@@ -24,6 +24,7 @@ target_compile_options(rt_options INTERFACE
   "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CONFIG:Debug>>>:-lineinfo>"
 )
 
+add_subdirectory(external)
 add_subdirectory(src/core)
 add_subdirectory(src/gpu)
 add_subdirectory(src/scene)
