@@ -18,6 +18,7 @@ struct Scene {
    std::optional<CameraSettings> camera;
    std::vector<Material> materials;
    std::vector<std::uint32_t> material_indices;
+   std::vector<std::uint32_t> emissive_triangles;
 };
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path);

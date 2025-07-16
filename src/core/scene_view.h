@@ -19,6 +19,8 @@ struct SceneView {
    const std::uint32_t* indices;
    const Material* materials;
    const std::uint32_t* material_indices;
+   const std::uint32_t* emissive_triangles;
+   std::uint32_t emissive_triangle_count;
 };
 
 struct Hit {

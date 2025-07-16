@@ -29,4 +29,19 @@ RT_HOST_DEVICE inline Vec3 sample_cosine_hemisphere(Vec3 normal, Pcg32& rng) {
    return normalize(direction);
 }
 
+RT_HOST_DEVICE inline Vec3 sample_point_on_triangle(
+   const Vec3& v0,
+   const Vec3& v1,
+   const Vec3& v2,
+   Pcg32& rng
+) {
+   float u = rng.next_float();
+   float v = rng.next_float();
+   if (u + v > 1.f) {
+      u = 1.f - u;
+      v = 1.f - v;
+   }
+   return v0 + u * (v1 - v0) + v * (v2 - v0);
+}
+
 } // namespace rt

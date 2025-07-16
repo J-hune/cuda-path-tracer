@@ -78,8 +78,10 @@ std::vector<Material> load_materials(const fastgltf::Asset& asset) {
 }
 
 // Caméra glTF : regarde vers -z dans son repère local, haut selon +y
-std::expected<CameraSettings, std::string>
-load_camera(const fastgltf::Camera& camera, const Matrix& matrix) {
+std::expected<CameraSettings, std::string> load_camera(
+   const fastgltf::Camera& camera,
+   const Matrix& matrix
+) {
    const auto* perspective = std::get_if<fastgltf::Camera::Perspective>(&camera.camera);
    if (perspective == nullptr) {
       return std::unexpected(
@@ -206,6 +208,14 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
 
    if (!error.empty()) {
       return std::unexpected(error);
+   }
+
+   // Triangles émissifs, tirés comme sources de lumière par l'éclairage direct
+   for (std::size_t triangle = 0; triangle < scene.material_indices.size(); ++triangle) {
+      const Material& material = scene.materials[scene.material_indices[triangle]];
+      if (max_component(material.emission) > 0.f) {
+         scene.emissive_triangles.push_back(static_cast<std::uint32_t>(triangle));
+      }
    }
    return scene;
 }
