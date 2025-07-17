@@ -6,6 +6,7 @@
 #include "core/vec2.h"
 #include "core/vec3.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -50,7 +51,11 @@ std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::pa
       );
    }
 
-   fastgltf::Parser parser(fastgltf::Extensions::KHR_materials_emissive_strength);
+   constexpr auto kExtensions = fastgltf::Extensions::KHR_materials_emissive_strength |
+                                fastgltf::Extensions::KHR_materials_transmission |
+                                fastgltf::Extensions::KHR_materials_ior |
+                                fastgltf::Extensions::KHR_materials_volume;
+   fastgltf::Parser parser(kExtensions);
    auto asset = parser.loadGltf(
       data.get(),
       path.parent_path(),
@@ -86,10 +91,31 @@ std::expected<std::vector<Material>, std::string> load_materials(const fastgltf:
          texture = static_cast<std::int32_t>(info.textureIndex);
       }
 
+      const float transmission = material.transmission
+                                    ? static_cast<float>(material.transmission->transmissionFactor)
+                                    : 0.0f;
+
+      // KHR_materials_volume : couleur atteinte après attenuationDistance -> coefficient
+      // d'absorption
+      Vec3 absorption{0.0f, 0.0f, 0.0f};
+      if (material.volume && material.volume->thicknessFactor > 0.0f &&
+          std::isfinite(material.volume->attenuationDistance)) {
+         const auto& color = material.volume->attenuationColor;
+         const float distance = material.volume->attenuationDistance;
+         absorption = {
+            -std::log(color.x()) / distance,
+            -std::log(color.y()) / distance,
+            -std::log(color.z()) / distance
+         };
+      }
+
       materials.push_back({
          .albedo = {base_color.x(), base_color.y(), base_color.z()},
          .emission = {emissive.x() * strength, emissive.y() * strength, emissive.z() * strength},
          .base_color_texture = texture,
+         .transmission = transmission,
+         .ior = material.ior,
+         .absorption = absorption,
       });
    }
    materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});

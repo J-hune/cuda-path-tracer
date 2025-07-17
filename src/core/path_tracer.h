@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/dielectric.h"
 #include "core/host_device.h"
 #include "core/material.h"
 #include "core/ray.h"
@@ -19,12 +20,18 @@ inline constexpr int kRouletteStart = 3;
 inline constexpr int kMaxBounces = 64;
 inline constexpr float kRayOffset = 1e-3f;
 
-// Normale géométrique du triangle, orientée vers le côté d'où vient le rayon
-RT_HOST_DEVICE inline Vec3 facing_normal(SceneView view, std::uint32_t triangle, Vec3 direction) {
+// Normale géométrique du triangle, dans le sens donné par l'ordre des sommets (vers l'extérieur
+// pour un maillage fermé orienté comme le veut glTF)
+RT_HOST_DEVICE inline Vec3 geometric_normal(SceneView view, std::uint32_t triangle) {
    const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
    const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
    const Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
-   const Vec3 n = normalize(cross(v1 - v0, v2 - v0));
+   return normalize(cross(v1 - v0, v2 - v0));
+}
+
+// Normale géométrique du triangle, orientée vers le côté d'où vient le rayon
+RT_HOST_DEVICE inline Vec3 facing_normal(SceneView view, std::uint32_t triangle, Vec3 direction) {
+   const Vec3 n = geometric_normal(view, triangle);
    return dot(n, direction) > 0.0f ? -n : n;
 }
 
@@ -103,6 +110,8 @@ RT_HOST_DEVICE inline Vec3 surface_albedo(
 RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
    Vec3 radiance{0.0f, 0.0f, 0.0f};
    Vec3 throughput{1.0f, 1.0f, 1.0f};
+   // Après un rebond spéculaire, l'éclairage direct n'a pas été calculé : l'émission touchée compte
+   bool specular_bounce = false;
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       Hit hit{};
@@ -112,15 +121,36 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
       }
 
       const Material material = view.materials[view.material_indices[hit.triangle]];
-      if (bounce == 0) {
+      if (bounce == 0 || specular_bounce) {
          radiance += throughput * material.emission;
       }
       const Vec3 point = ray.at(hit.t);
-      const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
       const Vec3 albedo = surface_albedo(view, material, hit);
-      const Vec3 direct = direct_light(view, point, n, albedo, rng);
-      radiance += throughput * direct;
-      throughput = throughput * albedo;
+
+      if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
+         // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
+         const Vec3 outward = geometric_normal(view, hit.triangle);
+         if (dot(ray.direction, outward) > 0.0f) {
+            // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
+            throughput = throughput * beer_lambert(material.absorption, hit.t);
+         }
+         const DielectricSample
+            sample = sample_dielectric(ray.direction, outward, material.ior, rng);
+         if (sample.transmitted) {
+            throughput = throughput * albedo;
+         }
+         const Vec3 side = dot(sample.direction, outward) > 0.0f ? outward : -outward;
+         ray = {point + (side * kRayOffset), sample.direction};
+         specular_bounce = true;
+      } else {
+         // Surface diffuse : éclairage direct, puis rebond en cosinus
+         const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
+         const Vec3 direct = direct_light(view, point, n, albedo, rng);
+         radiance += throughput * direct;
+         throughput = throughput * albedo;
+         ray = {point + (n * kRayOffset), sample_cosine_hemisphere(n, rng)};
+         specular_bounce = false;
+      }
 
       if (bounce >= kRouletteStart) {
          const float p = std::fmin(max_component(throughput), 0.95f);
@@ -129,8 +159,6 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
          }
          throughput /= p;
       }
-
-      ray = {point + (n * kRayOffset), sample_cosine_hemisphere(n, rng)};
    }
 
    return radiance;
