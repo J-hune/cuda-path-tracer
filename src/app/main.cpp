@@ -5,6 +5,7 @@
 #include "scene/gltf_loader.h"
 
 #include <cstdlib>
+#include <format>
 #include <iostream>
 
 int main(int argc, char** argv) {
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
    while (!window->should_close()) {
       renderer.render(camera);
       window->present();
+      window->set_title(std::format("raytracer - {} spp", renderer.sample_count()));
       Window::poll_events();
    }
 

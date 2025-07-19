@@ -24,6 +24,7 @@ public:
 
    [[nodiscard]] bool should_close() const;
    static void poll_events();
+   void set_title(const std::string& title);
 
    // Pixel buffer OpenGL de width × height pixels RGBA8, ligne 0 en haut
    [[nodiscard]] unsigned int pixel_buffer() const noexcept { return pixel_buffer_; }

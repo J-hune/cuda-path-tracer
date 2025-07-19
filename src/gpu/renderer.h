@@ -4,6 +4,7 @@
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <cstdint>
 #include <memory>
 
 // Rendu GPU d'une scène. La scène est envoyée sur le GPU une seule fois, à la construction.
@@ -20,8 +21,14 @@ public:
    // Pixel buffer OpenGL (RGBA8, width × height) dans lequel les images sont écrites
    void attach_pixel_buffer(unsigned int gl_buffer);
 
-   // Rend une image vue depuis la caméra et l'écrit dans le pixel buffer
+   // Ajoute un échantillon par pixel, puis écrit la moyenne accumulée dans le pixel buffer
    void render(const rt::Camera& camera);
+
+   // Repart de zéro (à appeler quand la caméra ou la scène change)
+   void reset();
+
+   // Nombre d'échantillons par pixel accumulés depuis le dernier reset
+   [[nodiscard]] std::uint32_t sample_count() const;
 
 private:
    struct Impl;

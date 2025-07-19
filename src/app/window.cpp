@@ -82,6 +82,10 @@ void Window::poll_events() {
    glfwPollEvents();
 }
 
+void Window::set_title(const std::string& title) {
+   glfwSetWindowTitle(window_, title.c_str());
+}
+
 void Window::present() {
    // Copie GPU -> GPU du pixel buffer vers la texture (le dernier argument est un décalage dans le
    // buffer lié, pas un pointeur CPU)

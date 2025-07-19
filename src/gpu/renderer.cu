@@ -27,12 +27,12 @@
 
 namespace {
 
-constexpr int kSamplesPerPixel = 16;
-
-__global__ void render_kernel(
+// Ajoute un échantillon par pixel (l'échantillon numéro sample_index) au tampon d'accumulation
+__global__ void accumulate_kernel(
    rt::Camera camera,
    rt::SceneView view,
-   rt::Vec3* image,
+   rt::Vec3* accumulation,
+   std::uint32_t sample_index,
    int width,
    int height
 ) {
@@ -43,19 +43,15 @@ __global__ void render_kernel(
    }
 
    const auto pixel_index = static_cast<std::uint32_t>((y * width) + x);
-   rt::Vec3 color{0.0f, 0.0f, 0.0f};
-   for (int sample = 0; sample < kSamplesPerPixel; ++sample) {
-      rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(pixel_index, static_cast<std::uint32_t>(sample));
-      const float jitter_x = rng.next_float();
-      const float jitter_y = rng.next_float();
-      const rt::Ray ray = camera.generate_ray(
-         static_cast<float>(x) + jitter_x,
-         static_cast<float>(y) + jitter_y
-      );
-      color += rt::trace_path(ray, view, rng);
-   }
-
-   image[pixel_index] = color / static_cast<float>(kSamplesPerPixel);
+   rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(pixel_index, sample_index);
+   const float jitter_x = rng.next_float();
+   const float jitter_y = rng.next_float();
+   const rt::Ray ray = camera.generate_ray(
+      static_cast<float>(x) + jitter_x,
+      static_cast<float>(y) + jitter_y
+   );
+   const rt::Vec3 radiance = rt::trace_path(ray, view, rng);
+   accumulation[pixel_index] = sample_index == 0 ? radiance : accumulation[pixel_index] + radiance;
 }
 
 __device__ unsigned char encode_channel(float linear) {
@@ -63,13 +59,18 @@ __device__ unsigned char encode_channel(float linear) {
    return static_cast<unsigned char>(std::lround(std::pow(clamped, 1.0f / 2.2f) * 255.0f));
 }
 
-// Image linéaire -> RGBA8 encodé gamma, dans le pixel buffer affiché
-__global__ void encode_kernel(const rt::Vec3* image, uchar4* pixels, int pixel_count) {
+// Moyenne des échantillons accumulés -> RGBA8 encodé gamma, dans le pixel buffer affiché
+__global__ void encode_kernel(
+   const rt::Vec3* accumulation,
+   float inverse_sample_count,
+   uchar4* pixels,
+   int pixel_count
+) {
    const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
    if (i >= pixel_count) {
       return;
    }
-   const rt::Vec3 c = image[i];
+   const rt::Vec3 c = accumulation[i] * inverse_sample_count;
    pixels[i] = make_uchar4(encode_channel(c.x), encode_channel(c.y), encode_channel(c.z), 255);
 }
 
@@ -89,7 +90,7 @@ struct Renderer::Impl {
       uvs(scene.uvs.size()),
       textures(scene.textures.size()),
       texels(scene.texels.size()),
-      image(static_cast<std::size_t>(width) * height),
+      accumulation(static_cast<std::size_t>(width) * height),
       environment(scene.environment) {
       nodes.upload(bvh.nodes);
       triangle_indices.upload(bvh.triangle_indices);
@@ -132,7 +133,8 @@ struct Renderer::Impl {
    DeviceBuffer<rt::Vec2> uvs;
    DeviceBuffer<rt::Texture> textures;
    DeviceBuffer<rt::Vec3> texels;
-   DeviceBuffer<rt::Vec3> image;
+   DeviceBuffer<rt::Vec3> accumulation;
+   std::uint32_t sample_count = 0;
    rt::Environment environment;
    std::optional<GlPixelBuffer> pixel_buffer;
 };
@@ -148,18 +150,35 @@ void Renderer::attach_pixel_buffer(unsigned int gl_buffer) {
    impl_->pixel_buffer.emplace(gl_buffer);
 }
 
+void Renderer::reset() {
+   impl_->sample_count = 0;
+}
+
+std::uint32_t Renderer::sample_count() const {
+   return impl_->sample_count;
+}
+
 void Renderer::render(const rt::Camera& camera) {
    Impl& impl = *impl_;
    const dim3 block(16, 16);
    const dim3 grid((impl.width + 15) / 16, (impl.height + 15) / 16);
-   render_kernel<<<grid, block>>>(camera, impl.view(), impl.image.data(), impl.width, impl.height);
+   accumulate_kernel<<<grid, block>>>(
+      camera,
+      impl.view(),
+      impl.accumulation.data(),
+      impl.sample_count,
+      impl.width,
+      impl.height
+   );
    RT_CUDA_CHECK_LAUNCH();
+   ++impl.sample_count;
 
    if (impl.pixel_buffer) {
       const int pixel_count = impl.width * impl.height;
       const GlPixelBuffer::Mapping mapping = impl.pixel_buffer->map();
       encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
-         impl.image.data(),
+         impl.accumulation.data(),
+         1.0f / static_cast<float>(impl.sample_count),
          mapping.pixels(),
          pixel_count
       );
