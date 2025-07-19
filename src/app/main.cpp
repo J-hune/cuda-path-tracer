@@ -1,15 +1,11 @@
-#include "app/image_io.h"
 #include "app/window.h"
 #include "core/camera.h"
-#include "core/vec3.h"
-#include "gpu/render.h"
+#include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <vector>
 
 int main(int argc, char** argv) {
    if (argc < 2) {
@@ -34,20 +30,19 @@ int main(int argc, char** argv) {
    const rt::Camera camera(scene->camera.value_or(rt::CameraSettings{}), kWidth, kHeight);
 
    const rt::Bvh bvh = rt::build_bvh(*scene);
-   const std::vector<rt::Vec3> image = render(camera, *scene, bvh, kWidth, kHeight);
-   if (!write_png("image.png", image, kWidth, kHeight)) {
-      std::cerr << "Failed to write image.png" << '\n';
-      return EXIT_FAILURE;
-   }
 
+   // La fenêtre (et son contexte OpenGL) doit exister avant le renderer, et lui survivre
    auto window = Window::create(kWidth, kHeight, "raytracer");
    if (!window) {
       std::cerr << window.error() << '\n';
       return EXIT_FAILURE;
    }
-   const std::vector<std::uint8_t> pixels = to_rgba8(image);
+   Renderer renderer(*scene, bvh, kWidth, kHeight);
+   renderer.attach_pixel_buffer(window->pixel_buffer());
+
    while (!window->should_close()) {
-      window->show(pixels);
+      renderer.render(camera);
+      window->present();
       Window::poll_events();
    }
 

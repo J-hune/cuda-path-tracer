@@ -1,13 +1,12 @@
 #pragma once
 
-#include <cstdint>
 #include <expected>
 #include <string>
-#include <vector>
 
 struct GLFWwindow;
 
-// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA de taille fixe.
+// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8 de taille fixe.
+// L'image est lue dans un pixel buffer OpenGL, que CUDA peut remplir directement.
 // Une seule fenêtre par programme : elle initialise et termine GLFW.
 class Window {
 public:
@@ -26,8 +25,11 @@ public:
    [[nodiscard]] bool should_close() const;
    static void poll_events();
 
-   // Affiche une image RGBA8 de width × height pixels, ligne 0 en haut
-   void show(const std::vector<std::uint8_t>& rgba);
+   // Pixel buffer OpenGL de width × height pixels RGBA8, ligne 0 en haut
+   [[nodiscard]] unsigned int pixel_buffer() const noexcept { return pixel_buffer_; }
+
+   // Affiche le contenu actuel du pixel buffer
+   void present();
 
 private:
    Window(GLFWwindow* window, int width, int height);
@@ -35,6 +37,7 @@ private:
    GLFWwindow* window_ = nullptr;
    unsigned int texture_ = 0;
    unsigned int framebuffer_ = 0;
+   unsigned int pixel_buffer_ = 0;
    int width_ = 0;
    int height_ = 0;
 };

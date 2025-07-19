@@ -6,11 +6,9 @@
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
-#include <cstdint>
 #include <expected>
 #include <string>
 #include <utility>
-#include <vector>
 
 std::expected<Window, std::string> Window::create(int width, int height, const std::string& title) {
    if (glfwInit() == GLFW_FALSE) {
@@ -45,12 +43,23 @@ Window::Window(GLFWwindow* window, int width, int height):
    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_, 0);
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+   glGenBuffers(1, &pixel_buffer_);
+   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer_);
+   glBufferData(
+      GL_PIXEL_UNPACK_BUFFER,
+      static_cast<GLsizeiptr>(width) * height * 4,
+      nullptr,
+      GL_STREAM_DRAW
+   );
+   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
 Window::Window(Window&& other) noexcept:
    window_(std::exchange(other.window_, nullptr)),
    texture_(std::exchange(other.texture_, 0)),
    framebuffer_(std::exchange(other.framebuffer_, 0)),
+   pixel_buffer_(std::exchange(other.pixel_buffer_, 0)),
    width_(other.width_),
    height_(other.height_) {}
 
@@ -58,6 +67,7 @@ Window::~Window() {
    if (window_ == nullptr) {
       return;
    }
+   glDeleteBuffers(1, &pixel_buffer_);
    glDeleteFramebuffers(1, &framebuffer_);
    glDeleteTextures(1, &texture_);
    glfwDestroyWindow(window_);
@@ -72,9 +82,13 @@ void Window::poll_events() {
    glfwPollEvents();
 }
 
-void Window::show(const std::vector<std::uint8_t>& rgba) {
+void Window::present() {
+   // Copie GPU -> GPU du pixel buffer vers la texture (le dernier argument est un décalage dans le
+   // buffer lié, pas un pointeur CPU)
+   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer_);
    glBindTexture(GL_TEXTURE_2D, texture_);
-   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
    // La ligne 0 de l'image est en haut, celle d'OpenGL en bas : la copie retourne l'image
    int framebuffer_width = 0;
