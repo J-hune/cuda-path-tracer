@@ -1,10 +1,12 @@
 #include "app/image_io.h"
+#include "app/window.h"
 #include "core/camera.h"
 #include "core/vec3.h"
 #include "gpu/render.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -36,6 +38,17 @@ int main(int argc, char** argv) {
    if (!write_png("image.png", image, kWidth, kHeight)) {
       std::cerr << "Failed to write image.png" << '\n';
       return EXIT_FAILURE;
+   }
+
+   auto window = Window::create(kWidth, kHeight, "raytracer");
+   if (!window) {
+      std::cerr << window.error() << '\n';
+      return EXIT_FAILURE;
+   }
+   const std::vector<std::uint8_t> pixels = to_rgba8(image);
+   while (!window->should_close()) {
+      window->show(pixels);
+      Window::poll_events();
    }
 
    return EXIT_SUCCESS;

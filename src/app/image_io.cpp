@@ -5,23 +5,33 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstddef>
+#include <cstdint>
 #include <stb_image_write.h>
 #include <string>
 #include <vector>
 
-bool write_png(const std::string& path, const std::vector<rt::Vec3>& image, int width, int height) {
-   std::vector<unsigned char> pixels;
-   pixels.reserve(static_cast<std::size_t>(width) * height * 3);
+namespace {
 
-   for (const auto& pixel : image) {
-      for (float channel : {pixel.x, pixel.y, pixel.z}) {
-         channel = std::clamp(channel, 0.f, 1.f);
-         channel = std::pow(channel, 1.f / 2.2f);
+std::uint8_t encode_channel(float linear) {
+   const float encoded = std::pow(std::clamp(linear, 0.f, 1.f), 1.f / 2.2f);
+   return static_cast<std::uint8_t>(std::lround(encoded * 255.f));
+}
 
-         pixels.push_back(static_cast<unsigned char>(std::lround(channel * 255.f)));
-      }
+} // namespace
+
+std::vector<std::uint8_t> to_rgba8(const std::vector<rt::Vec3>& image) {
+   std::vector<std::uint8_t> pixels;
+   pixels.reserve(image.size() * 4);
+   for (const rt::Vec3& pixel : image) {
+      pixels.push_back(encode_channel(pixel.x));
+      pixels.push_back(encode_channel(pixel.y));
+      pixels.push_back(encode_channel(pixel.z));
+      pixels.push_back(255);
    }
+   return pixels;
+}
 
-   return stbi_write_png(path.c_str(), width, height, 3, pixels.data(), width * 3) != 0;
+bool write_png(const std::string& path, const std::vector<rt::Vec3>& image, int width, int height) {
+   const std::vector<std::uint8_t> pixels = to_rgba8(image);
+   return stbi_write_png(path.c_str(), width, height, 4, pixels.data(), width * 4) != 0;
 }
