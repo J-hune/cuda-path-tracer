@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
+#include <cstddef>
 #include <expected>
 #include <string>
 #include <utility>
@@ -55,13 +56,43 @@ Window::Window(GLFWwindow* window, int width, int height):
    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
+namespace {
+
+int glfw_key(Key key) {
+   switch (key) {
+      case Key::Forward:
+         return GLFW_KEY_W;
+      case Key::Backward:
+         return GLFW_KEY_S;
+      case Key::Left:
+         return GLFW_KEY_A;
+      case Key::Right:
+         return GLFW_KEY_D;
+      case Key::Up:
+         return GLFW_KEY_SPACE;
+      case Key::Down:
+         return GLFW_KEY_LEFT_CONTROL;
+      case Key::Fast:
+         return GLFW_KEY_LEFT_SHIFT;
+      case Key::Export:
+         return GLFW_KEY_P;
+      case Key::Quit:
+      case Key::Count:
+         break;
+   }
+   return GLFW_KEY_ESCAPE;
+}
+
+} // namespace
+
 Window::Window(Window&& other) noexcept:
    window_(std::exchange(other.window_, nullptr)),
    texture_(std::exchange(other.texture_, 0)),
    framebuffer_(std::exchange(other.framebuffer_, 0)),
    pixel_buffer_(std::exchange(other.pixel_buffer_, 0)),
    width_(other.width_),
-   height_(other.height_) {}
+   height_(other.height_),
+   was_down_(other.was_down_) {}
 
 Window::~Window() {
    if (window_ == nullptr) {
@@ -114,4 +145,34 @@ void Window::present() {
    );
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
    glfwSwapBuffers(window_);
+}
+
+bool Window::is_down(Key key) const {
+   return glfwGetKey(window_, glfw_key(key)) == GLFW_PRESS;
+}
+
+bool Window::was_pressed(Key key) {
+   const bool down = is_down(key);
+   bool& was_down = was_down_[static_cast<std::size_t>(key)];
+   const bool pressed = down && !was_down;
+   was_down = down;
+   return pressed;
+}
+
+bool Window::is_looking() const {
+   return glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+}
+
+CursorPosition Window::cursor_position() const {
+   CursorPosition position;
+   glfwGetCursorPos(window_, &position.x, &position.y);
+   return position;
+}
+
+void Window::close() {
+   glfwSetWindowShouldClose(window_, GLFW_TRUE);
+}
+
+double Window::time() {
+   return glfwGetTime();
 }

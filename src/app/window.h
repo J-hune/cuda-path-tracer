@@ -1,9 +1,32 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <string>
 
 struct GLFWwindow;
+
+// Touches utilisées, désignées par leur rôle. Les touches GLFW correspondent à une position
+// physique : Forward est la touche W d'un clavier QWERTY, donc Z sur un clavier AZERTY.
+enum class Key : std::uint8_t {
+   Forward,
+   Backward,
+   Left,
+   Right,
+   Up,
+   Down,
+   Fast,
+   Export,
+   Quit,
+   Count
+};
+
+struct CursorPosition {
+   double x = 0.0;
+   double y = 0.0;
+};
 
 // Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8 de taille fixe.
 // L'image est lue dans un pixel buffer OpenGL, que CUDA peut remplir directement.
@@ -32,6 +55,17 @@ public:
    // Affiche le contenu actuel du pixel buffer
    void present();
 
+   // Entrées clavier et souris, à jour après poll_events()
+   [[nodiscard]] bool is_down(Key key) const;
+   // Vrai une seule fois par appui, au moment où la touche s'enfonce
+   [[nodiscard]] bool was_pressed(Key key);
+   [[nodiscard]] bool is_looking() const; // clic droit maintenu
+   [[nodiscard]] CursorPosition cursor_position() const;
+   void close();
+
+   // Temps écoulé depuis l'initialisation, en secondes
+   [[nodiscard]] static double time();
+
 private:
    Window(GLFWwindow* window, int width, int height);
 
@@ -41,4 +75,5 @@ private:
    unsigned int pixel_buffer_ = 0;
    int width_ = 0;
    int height_ = 0;
+   std::array<bool, static_cast<std::size_t>(Key::Count)> was_down_{};
 };

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/camera.h"
+#include "core/vec3.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 // Rendu GPU d'une scène. La scène est envoyée sur le GPU une seule fois, à la construction.
 // Les types CUDA restent cachés dans renderer.cu (idiome pimpl) : ce fichier reste du C++ pur.
@@ -29,6 +31,9 @@ public:
 
    // Nombre d'échantillons par pixel accumulés depuis le dernier reset
    [[nodiscard]] std::uint32_t sample_count() const;
+
+   // Image accumulée (moyenne linéaire), copiée sur le CPU
+   [[nodiscard]] std::vector<rt::Vec3> image() const;
 
 private:
    struct Impl;

@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 #include <vector_functions.h>
 
 namespace {
@@ -156,6 +157,16 @@ void Renderer::reset() {
 
 std::uint32_t Renderer::sample_count() const {
    return impl_->sample_count;
+}
+
+std::vector<rt::Vec3> Renderer::image() const {
+   std::vector<rt::Vec3> pixels(impl_->accumulation.size());
+   impl_->accumulation.download(pixels);
+   const float inverse_count = 1.0f / static_cast<float>(impl_->sample_count);
+   for (rt::Vec3& pixel : pixels) {
+      pixel *= inverse_count;
+   }
+   return pixels;
 }
 
 void Renderer::render(const rt::Camera& camera) {
