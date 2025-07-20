@@ -18,7 +18,6 @@ std::expected<Window, std::string> Window::create(int width, int height, const s
 
    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
    GLFWwindow* window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
    if (window == nullptr) {
       glfwTerminate();
@@ -29,24 +28,14 @@ std::expected<Window, std::string> Window::create(int width, int height, const s
    return Window(window, width, height);
 }
 
-Window::Window(GLFWwindow* window, int width, int height):
-   window_(window),
-   width_(width),
-   height_(height) {
-   // Texture affichée, attachée à un framebuffer pour être recopiée dans la fenêtre
-   glGenTextures(1, &texture_);
-   glBindTexture(GL_TEXTURE_2D, texture_);
+namespace {
+
+// (Ré)alloue la texture et le pixel buffer à la taille width × height
+void allocate_image(GLuint texture, GLuint pixel_buffer, int width, int height) {
+   glBindTexture(GL_TEXTURE_2D, texture);
    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-   glGenFramebuffers(1, &framebuffer_);
-   glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
-   glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_, 0);
-   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-   glGenBuffers(1, &pixel_buffer_);
-   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer_);
+   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer);
    glBufferData(
       GL_PIXEL_UNPACK_BUFFER,
       static_cast<GLsizeiptr>(width) * height * 4,
@@ -55,8 +44,6 @@ Window::Window(GLFWwindow* window, int width, int height):
    );
    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
-
-namespace {
 
 int glfw_key(Key key) {
    switch (key) {
@@ -85,6 +72,24 @@ int glfw_key(Key key) {
 
 } // namespace
 
+Window::Window(GLFWwindow* window, int width, int height):
+   window_(window),
+   width_(width),
+   height_(height) {
+   // Texture affichée, attachée à un framebuffer pour être recopiée dans la fenêtre
+   glGenTextures(1, &texture_);
+   glBindTexture(GL_TEXTURE_2D, texture_);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glGenBuffers(1, &pixel_buffer_);
+   allocate_image(texture_, pixel_buffer_, width_, height_);
+
+   glGenFramebuffers(1, &framebuffer_);
+   glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
+   glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_, 0);
+   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+}
+
 Window::Window(Window&& other) noexcept:
    window_(std::exchange(other.window_, nullptr)),
    texture_(std::exchange(other.texture_, 0)),
@@ -111,6 +116,22 @@ bool Window::should_close() const {
 
 void Window::poll_events() {
    glfwPollEvents();
+}
+
+void Window::wait_events() {
+   glfwWaitEvents();
+}
+
+Size Window::framebuffer_size() const {
+   Size size;
+   glfwGetFramebufferSize(window_, &size.width, &size.height);
+   return size;
+}
+
+void Window::resize_image(Size size) {
+   width_ = size.width;
+   height_ = size.height;
+   allocate_image(texture_, pixel_buffer_, width_, height_);
 }
 
 void Window::set_title(const std::string& title) {

@@ -23,6 +23,12 @@ enum class Key : std::uint8_t {
    Count
 };
 
+struct Size {
+   int width = 0;
+   int height = 0;
+   bool operator==(const Size&) const = default;
+};
+
 struct CursorPosition {
    double x = 0.0;
    double y = 0.0;
@@ -47,6 +53,8 @@ public:
 
    [[nodiscard]] bool should_close() const;
    static void poll_events();
+   // Attend le prochain événement (fenêtre réduite : inutile de rendre)
+   static void wait_events();
    void set_title(const std::string& title);
 
    // Pixel buffer OpenGL de width × height pixels RGBA8, ligne 0 en haut
@@ -54,6 +62,14 @@ public:
 
    // Affiche le contenu actuel du pixel buffer
    void present();
+
+   // Taille actuelle de la zone de dessin, en pixels (0 × 0 si la fenêtre est réduite)
+   [[nodiscard]] Size framebuffer_size() const;
+   // Taille de l'image affichée (celle du pixel buffer)
+   [[nodiscard]] Size image_size() const noexcept { return {width_, height_}; }
+   // Change la taille de l'image affichée. Le pixel buffer ne doit plus être enregistré auprès de
+   // CUDA : son contenu est réalloué.
+   void resize_image(Size size);
 
    // Entrées clavier et souris, à jour après poll_events()
    [[nodiscard]] bool is_down(Key key) const;

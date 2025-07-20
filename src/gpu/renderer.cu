@@ -151,6 +151,17 @@ void Renderer::attach_pixel_buffer(unsigned int gl_buffer) {
    impl_->pixel_buffer.emplace(gl_buffer);
 }
 
+void Renderer::detach_pixel_buffer() {
+   impl_->pixel_buffer.reset();
+}
+
+void Renderer::resize(int width, int height) {
+   impl_->width = width;
+   impl_->height = height;
+   impl_->accumulation = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
+   impl_->sample_count = 0;
+}
+
 void Renderer::reset() {
    impl_->sample_count = 0;
 }

@@ -80,6 +80,22 @@ int main(int argc, char** argv) {
    CursorPosition last_cursor = window->cursor_position();
    while (!window->should_close()) {
       Window::poll_events();
+
+      // Redimensionnement : l'enregistrement CUDA doit être libéré avant qu'OpenGL ne réalloue
+      // le pixel buffer, puis refait sur le nouveau
+      const Size size = window->framebuffer_size();
+      if (size.width == 0 || size.height == 0) {
+         Window::wait_events();
+         continue;
+      }
+      if (size != window->image_size()) {
+         renderer.detach_pixel_buffer();
+         window->resize_image(size);
+         renderer.resize(size.width, size.height);
+         renderer.attach_pixel_buffer(window->pixel_buffer());
+         camera = rt::Camera(fly_camera.settings(), size.width, size.height);
+      }
+
       const double now = Window::time();
       const auto delta_time = static_cast<float>(now - last_time);
       last_time = now;
@@ -89,7 +105,8 @@ int main(int argc, char** argv) {
       }
       if (window->was_pressed(Key::Export)) {
          const std::string path = std::format("render_{}spp.png", renderer.sample_count());
-         if (write_png(path, renderer.image(), kWidth, kHeight)) {
+         const Size image_size = window->image_size();
+         if (write_png(path, renderer.image(), image_size.width, image_size.height)) {
             std::cout << "Image exportée : " << path << '\n';
          } else {
             std::cerr << "Échec de l'export de " << path << '\n';
@@ -115,7 +132,7 @@ int main(int argc, char** argv) {
       last_cursor = cursor;
 
       if (moved) {
-         camera = rt::Camera(fly_camera.settings(), kWidth, kHeight);
+         camera = rt::Camera(fly_camera.settings(), size.width, size.height);
          renderer.reset();
       }
 

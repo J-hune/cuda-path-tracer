@@ -22,6 +22,11 @@ public:
 
    // Pixel buffer OpenGL (RGBA8, width × height) dans lequel les images sont écrites
    void attach_pixel_buffer(unsigned int gl_buffer);
+   // Libère l'enregistrement CUDA du pixel buffer (avant qu'OpenGL ne le réalloue)
+   void detach_pixel_buffer();
+
+   // Change la taille de l'image et repart de zéro
+   void resize(int width, int height);
 
    // Ajoute un échantillon par pixel, puis écrit la moyenne accumulée dans le pixel buffer
    void render(const rt::Camera& camera);
