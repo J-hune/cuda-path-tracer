@@ -8,6 +8,7 @@
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <format>
 #include <iostream>
@@ -77,6 +78,9 @@ int main(int argc, char** argv) {
    const float move_speed = 0.25f * scene_extent(*scene);
 
    double last_time = Window::time();
+   double stats_start = last_time;
+   std::uint64_t stats_rays = 0;
+   double stats_milliseconds = 0.0;
    CursorPosition last_cursor = window->cursor_position();
    while (!window->should_close()) {
       Window::poll_events();
@@ -138,7 +142,24 @@ int main(int argc, char** argv) {
 
       renderer.render(camera);
       window->present();
-      window->set_title(std::format("raytracer - {} spp", renderer.sample_count()));
+      // Débit moyenné sur une demi-seconde, pour un affichage lisible
+      const Renderer::FrameStats frame = renderer.last_frame();
+      stats_rays += frame.rays;
+      stats_milliseconds += frame.milliseconds;
+      if (now - stats_start >= 0.5) {
+         const double mrays_per_second = static_cast<double>(stats_rays) /
+                                         (stats_milliseconds * 1e3);
+         window->set_title(
+            std::format(
+               "raytracer - {} spp - {:.0f} Mrayons/s",
+               renderer.sample_count(),
+               mrays_per_second
+            )
+         );
+         stats_start = now;
+         stats_rays = 0;
+         stats_milliseconds = 0.0;
+      }
    }
 
    return EXIT_SUCCESS;

@@ -99,7 +99,10 @@ void check_furnace(float albedo, float expected_on_cube) {
             hits += on_cube ? 1 : 0;
             const float expected = on_cube ? expected_on_cube : 1.0f;
 
-            const rt::Vec3 radiance = rt::trace_path(ray, view, rng);
+            std::uint32_t ray_count = 0;
+            const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count);
+            // Cube convexe et aucune lampe : un rayon s'il rate le cube, deux s'il le touche
+            REQUIRE(ray_count == (on_cube ? 2u : 1u));
             REQUIRE_THAT(radiance.x, Catch::Matchers::WithinAbs(expected, 1e-5));
             REQUIRE_THAT(radiance.y, Catch::Matchers::WithinAbs(expected, 1e-5));
             REQUIRE_THAT(radiance.z, Catch::Matchers::WithinAbs(expected, 1e-5));
@@ -151,7 +154,8 @@ TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
                static_cast<float>(x) + rng.next_float(),
                static_cast<float>(y) + rng.next_float()
             );
-            sum += rt::trace_path(ray, view, rng).x;
+            std::uint32_t ray_count = 0;
+            sum += rt::trace_path(ray, view, rng, ray_count).x;
             ++count;
          }
       }

@@ -13,6 +13,12 @@
 // Les types CUDA restent cachés dans renderer.cu (idiome pimpl) : ce fichier reste du C++ pur.
 class Renderer {
 public:
+   // Mesures de la dernière image : temps GPU du rendu et nombre de rayons lancés
+   struct FrameStats {
+      float milliseconds = 0.0f;
+      std::uint64_t rays = 0;
+   };
+
    Renderer(const rt::Scene& scene, const rt::Bvh& bvh, int width, int height);
    ~Renderer();
    Renderer(const Renderer&) = delete;
@@ -36,6 +42,8 @@ public:
 
    // Nombre d'échantillons par pixel accumulés depuis le dernier reset
    [[nodiscard]] std::uint32_t sample_count() const;
+
+   [[nodiscard]] FrameStats last_frame() const;
 
    // Image accumulée (moyenne linéaire), copiée sur le CPU
    [[nodiscard]] std::vector<rt::Vec3> image() const;

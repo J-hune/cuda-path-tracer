@@ -47,7 +47,15 @@ RT_HOST_DEVICE inline bool is_occluded(SceneView view, Vec3 origin, Vec3 target)
 }
 
 // Échantillonne un triangle émissif au hasard et calcule la contribution de la lumière directe
-RT_HOST_DEVICE inline Vec3 direct_light(SceneView view, Vec3 x, Vec3 n, Vec3 albedo, Pcg32& rng) {
+// ray_count est incrémenté du nombre de rayons lancés (le rayon d'ombre)
+RT_HOST_DEVICE inline Vec3 direct_light(
+   SceneView view,
+   Vec3 x,
+   Vec3 n,
+   Vec3 albedo,
+   Pcg32& rng,
+   std::uint32_t& ray_count
+) {
    if (view.emissive_triangle_count == 0) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
@@ -74,7 +82,11 @@ RT_HOST_DEVICE inline Vec3 direct_light(SceneView view, Vec3 x, Vec3 n, Vec3 alb
    const float cos_x = dot(n, wi);
    const float cos_y = std::fabs(dot(n_l, wi));
 
-   if (cos_x <= 0.0f || cos_y <= 0.0f || is_occluded(view, x + (n * kRayOffset), y)) {
+   if (cos_x <= 0.0f || cos_y <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   ++ray_count;
+   if (is_occluded(view, x + (n * kRayOffset), y)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
@@ -106,8 +118,14 @@ RT_HOST_DEVICE inline Vec3 surface_albedo(
    return material.albedo * sample_texture(texture, view.texels, interpolate_uv(view, hit));
 }
 
-// Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte
-RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
+// Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte.
+// ray_count est incrémenté du nombre de rayons lancés (rebonds et rayons d'ombre)
+RT_HOST_DEVICE inline Vec3 trace_path(
+   Ray ray,
+   SceneView view,
+   Pcg32& rng,
+   std::uint32_t& ray_count
+) {
    Vec3 radiance{0.0f, 0.0f, 0.0f};
    Vec3 throughput{1.0f, 1.0f, 1.0f};
    // Après un rebond spéculaire, l'éclairage direct n'a pas été calculé : l'émission touchée compte
@@ -115,6 +133,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       Hit hit{};
+      ++ray_count;
       if (!intersect_scene(ray, view, hit)) {
          radiance += throughput * view.environment.radiance(ray.direction);
          return radiance;
@@ -145,7 +164,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(Ray ray, SceneView view, Pcg32& rng) {
       } else {
          // Surface diffuse : éclairage direct, puis rebond en cosinus
          const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
-         const Vec3 direct = direct_light(view, point, n, albedo, rng);
+         const Vec3 direct = direct_light(view, point, n, albedo, rng, ray_count);
          radiance += throughput * direct;
          throughput = throughput * albedo;
          ray = {point + (n * kRayOffset), sample_cosine_hemisphere(n, rng)};

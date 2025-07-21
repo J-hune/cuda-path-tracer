@@ -12,6 +12,7 @@
 #include "gpu/cuda_check.h"
 #include "gpu/device_buffer.h"
 #include "gpu/gl_pixel_buffer.h"
+#include "gpu/gpu_timer.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
@@ -34,6 +35,7 @@ __global__ void accumulate_kernel(
    rt::SceneView view,
    rt::Vec3* accumulation,
    std::uint32_t sample_index,
+   unsigned long long* ray_counter,
    int width,
    int height
 ) {
@@ -51,8 +53,10 @@ __global__ void accumulate_kernel(
       static_cast<float>(x) + jitter_x,
       static_cast<float>(y) + jitter_y
    );
-   const rt::Vec3 radiance = rt::trace_path(ray, view, rng);
+   std::uint32_t ray_count = 0;
+   const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count);
    accumulation[pixel_index] = sample_index == 0 ? radiance : accumulation[pixel_index] + radiance;
+   atomicAdd(ray_counter, static_cast<unsigned long long>(ray_count));
 }
 
 __device__ unsigned char encode_channel(float linear) {
@@ -136,6 +140,9 @@ struct Renderer::Impl {
    DeviceBuffer<rt::Vec3> texels;
    DeviceBuffer<rt::Vec3> accumulation;
    std::uint32_t sample_count = 0;
+   DeviceBuffer<unsigned long long> ray_counter{1};
+   GpuTimer timer;
+   FrameStats last_frame;
    rt::Environment environment;
    std::optional<GlPixelBuffer> pixel_buffer;
 };
@@ -180,20 +187,32 @@ std::vector<rt::Vec3> Renderer::image() const {
    return pixels;
 }
 
+Renderer::FrameStats Renderer::last_frame() const {
+   return impl_->last_frame;
+}
+
 void Renderer::render(const rt::Camera& camera) {
    Impl& impl = *impl_;
    const dim3 block(16, 16);
    const dim3 grid((impl.width + 15) / 16, (impl.height + 15) / 16);
+   RT_CUDA_CHECK(cudaMemset(impl.ray_counter.data(), 0, sizeof(unsigned long long)));
+   impl.timer.start();
    accumulate_kernel<<<grid, block>>>(
       camera,
       impl.view(),
       impl.accumulation.data(),
       impl.sample_count,
+      impl.ray_counter.data(),
       impl.width,
       impl.height
    );
    RT_CUDA_CHECK_LAUNCH();
+   impl.timer.stop();
    ++impl.sample_count;
+
+   std::vector<unsigned long long> rays(1);
+   impl.ray_counter.download(rays);
+   impl.last_frame = {.milliseconds = impl.timer.elapsed_milliseconds(), .rays = rays[0]};
 
    if (impl.pixel_buffer) {
       const int pixel_count = impl.width * impl.height;
