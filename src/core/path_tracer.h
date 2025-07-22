@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/bsdf.h"
 #include "core/dielectric.h"
+#include "core/frame.h"
 #include "core/host_device.h"
 #include "core/material.h"
 #include "core/ray.h"
@@ -166,8 +168,14 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
          const Vec3 direct = direct_light(view, point, n, albedo, rng, ray_count);
          radiance += throughput * direct;
-         throughput = throughput * albedo;
-         ray = {point + (n * kRayOffset), sample_cosine_hemisphere(n, rng)};
+         const Frame frame = make_frame(n);
+         const Vec3 wo = frame.to_local(-ray.direction);
+         const BsdfSample bsdf = lambert::sample(albedo, wo, {rng.next_float(), rng.next_float()});
+         if (bsdf.pdf <= 0.0f) {
+            return radiance;
+         }
+         ray = {point + (n * kRayOffset), frame.to_world(bsdf.wi)};
+         throughput = throughput * bsdf.weight;
          specular_bounce = false;
       }
 

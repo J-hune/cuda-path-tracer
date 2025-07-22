@@ -2,6 +2,7 @@
 
 #include "core/host_device.h"
 #include "core/rng.h"
+#include "core/vec2.h"
 #include "core/vec3.h"
 
 #include <cmath>
@@ -20,13 +21,36 @@ RT_HOST_DEVICE inline Vec3 random_unit_vector(Pcg32& rng) {
    return Vec3{x, y, z};
 }
 
-RT_HOST_DEVICE inline Vec3 sample_cosine_hemisphere(Vec3 normal, Pcg32& rng) {
-   const Vec3 direction = normal + random_unit_vector(rng);
-   // Vecteur aléatoire presque opposé à la normale : somme quasi nulle
-   if (length_squared(direction) < 1e-12f) {
-      return normal;
+// Mapping concentrique de Shirley et Chiu : carré [0, 1]² -> disque unité, en préservant les
+// aires (des points uniformes dans le carré restent uniformes dans le disque) et la proximité
+RT_HOST_DEVICE inline Vec2 square_to_disk_concentric(Vec2 u) {
+   const float ox = (2.0f * u.x) - 1.0f;
+   const float oy = (2.0f * u.y) - 1.0f;
+   if (ox == 0.0f && oy == 0.0f) {
+      return {0.0f, 0.0f};
    }
-   return normalize(direction);
+   float radius = 0.0f;
+   float theta = 0.0f;
+   if (std::fabs(ox) > std::fabs(oy)) {
+      radius = ox;
+      theta = (kPi / 4.0f) * (oy / ox);
+   } else {
+      radius = oy;
+      theta = (kPi / 2.0f) - ((kPi / 4.0f) * (ox / oy));
+   }
+   return {radius * std::cos(theta), radius * std::sin(theta)};
+}
+
+// Méthode de Malley : un point uniforme du disque, projeté sur l'hémisphère, suit une densité
+// cos θ / π. Direction dans le repère local (normale = +z)
+RT_HOST_DEVICE inline Vec3 square_to_cosine_hemisphere(Vec2 u) {
+   const Vec2 d = square_to_disk_concentric(u);
+   const float z = std::sqrt(std::fmax(0.0f, 1.0f - (d.x * d.x) - (d.y * d.y)));
+   return {d.x, d.y, z};
+}
+
+RT_HOST_DEVICE constexpr float cosine_hemisphere_pdf(Vec3 local_direction) {
+   return local_direction.z > 0.0f ? local_direction.z / kPi : 0.0f;
 }
 
 RT_HOST_DEVICE inline Vec3 sample_point_on_triangle(
