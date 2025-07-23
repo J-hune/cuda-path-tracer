@@ -26,5 +26,6 @@ add_executable(rt_tests
    core/test_triangle.cpp
    scene/test_bvh.cpp
 )
+target_include_directories(rt_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(rt_tests PRIVATE core scene rt_options Catch2::Catch2WithMain)
 catch_discover_tests(rt_tests)
