@@ -17,11 +17,6 @@ RT_HOST_DEVICE inline float fresnel_schlick(float cos_theta, float ior) {
    return r0 + ((1.0f - r0) * m * m * m * m * m);
 }
 
-// Réflexion miroir de d autour de la normale n
-RT_HOST_DEVICE constexpr Vec3 reflect(Vec3 d, Vec3 n) {
-   return d - (2.0f * dot(d, n) * n);
-}
-
 // Atténuation de Beer-Lambert après une distance parcourue dans un milieu absorbant
 RT_HOST_DEVICE inline Vec3 beer_lambert(Vec3 absorption, float distance) {
    return {

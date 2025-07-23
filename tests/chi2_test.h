@@ -12,7 +12,7 @@
 //
 // La sphère est découpée en kZBins × kPhiBins cases d'angle solide égal (z = cos θ uniforme).
 // Observé : nombre de directions tirées par sample dans chaque case.
-// Attendu : intégrale de pdf sur la case (quadrature du point milieu), multipliée par le nombre de
+// Attendu : intégrale de pdf sur la case (point milieu en θ et φ), multipliée par le nombre de
 // tirages. Les cases dont l'attendu est trop faible sont regroupées, comme le veut le test.
 //
 // sample(u) -> direction unitaire, ou vecteur nul si le tirage échoue ; pdf(direction) -> densité.
@@ -21,7 +21,7 @@ namespace chi2 {
 
 inline constexpr int kZBins = 20;
 inline constexpr int kPhiBins = 40;
-inline constexpr int kQuadrature = 8; // points par côté de case pour intégrer la densité
+inline constexpr int kQuadrature = 48; // points par côté de case pour intégrer la densité
 inline constexpr double kMinExpected = 5.0;
 
 namespace detail {
@@ -90,24 +90,27 @@ double p_value(Sample sample, Pdf pdf, int sample_count, rt::Pcg32 rng) {
       }
    }
 
+   // Intégrale de la densité sur chaque case, en angle θ plutôt qu'en z = cos θ : les pas restent
+   // fins près des pôles, où un reflet étroit concentre toute sa densité. dω = sin θ dθ dφ
    std::vector<double> expected(kBins, 0.0);
-   const double cell_solid_angle = 4.0 * rt::kPi /
-                                   (static_cast<double>(kBins) * kQuadrature * kQuadrature);
    for (int zb = 0; zb < kZBins; ++zb) {
+      const double theta_max = std::acos(-1.0 + (2.0 * zb / kZBins));
+      const double theta_min = std::acos(-1.0 + (2.0 * (zb + 1) / kZBins));
+      const double d_theta = (theta_max - theta_min) / kQuadrature;
       for (int pb = 0; pb < kPhiBins; ++pb) {
+         const double d_phi = 2.0 * rt::kPi / (static_cast<double>(kPhiBins) * kQuadrature);
          double integral = 0.0;
          for (int i = 0; i < kQuadrature; ++i) {
+            const double theta = theta_min + ((i + 0.5) * d_theta);
             for (int j = 0; j < kQuadrature; ++j) {
-               const double z = -1.0 + (2.0 * (zb + ((i + 0.5) / kQuadrature)) / kZBins);
                const double phi = (2.0 * rt::kPi * (pb + ((j + 0.5) / kQuadrature)) / kPhiBins) -
                                   rt::kPi;
-               const double r = std::sqrt(std::fmax(0.0, 1.0 - (z * z)));
                const rt::Vec3 d{
-                  static_cast<float>(r * std::cos(phi)),
-                  static_cast<float>(r * std::sin(phi)),
-                  static_cast<float>(z)
+                  static_cast<float>(std::sin(theta) * std::cos(phi)),
+                  static_cast<float>(std::sin(theta) * std::sin(phi)),
+                  static_cast<float>(std::cos(theta))
                };
-               integral += pdf(d) * cell_solid_angle;
+               integral += pdf(d) * std::sin(theta) * d_theta * d_phi;
             }
          }
          expected

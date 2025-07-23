@@ -96,6 +96,11 @@ RT_HOST_DEVICE inline Vec3 normalize(Vec3 v) {
    return v / length(v);
 }
 
+// Réflexion miroir de la direction d autour de la normale unitaire n
+RT_HOST_DEVICE constexpr Vec3 reflect(Vec3 d, Vec3 n) {
+   return d - (2.0f * dot(d, n) * n);
+}
+
 // Minimum et maximum composante par composante
 RT_HOST_DEVICE constexpr Vec3 min(Vec3 a, Vec3 b) {
    return {a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y, a.z < b.z ? a.z : b.z};
