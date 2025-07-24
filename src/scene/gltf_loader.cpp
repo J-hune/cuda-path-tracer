@@ -113,6 +113,8 @@ std::expected<std::vector<Material>, std::string> load_materials(const fastgltf:
          .albedo = {base_color.x(), base_color.y(), base_color.z()},
          .emission = {emissive.x() * strength, emissive.y() * strength, emissive.z() * strength},
          .base_color_texture = texture,
+         .metallic = static_cast<float>(material.pbrData.metallicFactor),
+         .roughness = static_cast<float>(material.pbrData.roughnessFactor),
          .transmission = transmission,
          .ior = material.ior,
          .absorption = absorption,

@@ -11,6 +11,9 @@ struct Material {
    Vec3 emission;
    // Index dans Scene::textures, -1 si aucune
    std::int32_t base_color_texture = -1;
+   // Modèle metallic-roughness de glTF (diélectrique mat par défaut)
+   float metallic = 0.0f;
+   float roughness = 1.0f;
    // 0 : opaque (diffus), 1 : diélectrique transparent (verre)
    float transmission = 0.0f;
    // Indice de réfraction

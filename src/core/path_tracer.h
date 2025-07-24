@@ -49,12 +49,19 @@ RT_HOST_DEVICE inline bool is_occluded(SceneView view, Vec3 origin, Vec3 target)
 }
 
 // Échantillonne un triangle émissif au hasard et calcule la contribution de la lumière directe
+// Surface au point x : repère local (normale orientée vers l'observateur), direction d'observation
+// wo dans ce repère, et paramètres de la BSDF
+struct ShadingPoint {
+   Vec3 position;
+   Frame frame;
+   Vec3 wo;
+   SurfaceParams params;
+};
+
 // ray_count est incrémenté du nombre de rayons lancés (le rayon d'ombre)
 RT_HOST_DEVICE inline Vec3 direct_light(
    SceneView view,
-   Vec3 x,
-   Vec3 n,
-   Vec3 albedo,
+   const ShadingPoint& shading,
    Pcg32& rng,
    std::uint32_t& ray_count
 ) {
@@ -78,13 +85,19 @@ RT_HOST_DEVICE inline Vec3 direct_light(
    const float area = 0.5f * length(cross_l);
    const Vec3 n_l = normalize(cross_l);
 
+   const Vec3 x = shading.position;
+   const Vec3 n = shading.frame.normal;
    const float d2 = length_squared(y - x);
    const Vec3 wi = (y - x) / std::sqrt(d2);
 
    const float cos_x = dot(n, wi);
    const float cos_y = std::fabs(dot(n_l, wi));
-
    if (cos_x <= 0.0f || cos_y <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+
+   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   if (max_component(f) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
@@ -93,10 +106,10 @@ RT_HOST_DEVICE inline Vec3 direct_light(
    }
 
    const Material material = view.materials[view.material_indices[tri]];
-   // BSDF lambertienne = albedo / π ; densité du point tiré = 1 / (aire × nombre de lampes)
+   // Densité du point tiré = 1 / (aire × nombre de lampes), ramenée en angle solide par cos_y / d²
    const float geometry = cos_x * cos_y / d2;
    const float inverse_pdf = area * static_cast<float>(view.emissive_triangle_count);
-   return (albedo / kPi) * material.emission * (geometry * inverse_pdf);
+   return f * material.emission * (geometry * inverse_pdf);
 }
 
 // Coordonnées de texture au point touché, interpolées entre les trois sommets
@@ -164,13 +177,26 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          ray = {point + (side * kRayOffset), sample.direction};
          specular_bounce = true;
       } else {
-         // Surface diffuse : éclairage direct, puis rebond en cosinus
+         // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
          const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
-         const Vec3 direct = direct_light(view, point, n, albedo, rng, ray_count);
-         radiance += throughput * direct;
          const Frame frame = make_frame(n);
-         const Vec3 wo = frame.to_local(-ray.direction);
-         const BsdfSample bsdf = lambert::sample(albedo, wo, {rng.next_float(), rng.next_float()});
+         const ShadingPoint shading{
+            .position = point,
+            .frame = frame,
+            .wo = frame.to_local(-ray.direction),
+            .params = {
+               .base_color = albedo,
+               .metallic = material.metallic,
+               .roughness = material.roughness
+            },
+         };
+         radiance += throughput * direct_light(view, shading, rng, ray_count);
+
+         const BsdfSample bsdf = principled::sample(
+            shading.params,
+            shading.wo,
+            {rng.next_float(), rng.next_float()}
+         );
          if (bsdf.pdf <= 0.0f) {
             return radiance;
          }

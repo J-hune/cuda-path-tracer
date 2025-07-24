@@ -1,3 +1,4 @@
+#include "core/bsdf.h"
 #include "core/camera.h"
 #include "core/environment.h"
 #include "core/material.h"
@@ -9,22 +10,24 @@
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 
 // Test du four blanc : un objet sans émission dans un environnement uniforme de radiance 1.
-// Avec un albédo de 1, aucune énergie n'est absorbée : chaque pixel doit valoir exactement 1.
-// L'objet est convexe : après un rebond, le rayon repart toujours vers l'environnement,
-// donc chaque échantillon (et pas seulement la moyenne) vaut la valeur attendue.
+// L'objet est convexe : après un rebond, le rayon repart toujours vers l'environnement. La lumière
+// rapportée vaut donc, en moyenne, l'albédo directionnel de la BSDF : la part de lumière qu'elle
+// renvoie pour cet angle de vue. Le test compare le rendu à cet albédo, calculé indépendamment en
+// intégrant eval sur l'hémisphère.
 
 namespace {
 
 constexpr int kImageSize = 64;
-constexpr int kSamplesPerPixel = 4;
 
 // Cube [-1, 1]³ en 12 triangles, avec un matériau unique.
 // Les triangles sont orientés vers l'extérieur, comme dans un glTF (nécessaire pour le verre).
@@ -72,56 +75,81 @@ rt::SceneView make_view(const rt::Scene& scene, const rt::Bvh& bvh) {
    };
 }
 
-// Rend l'image et vérifie chaque échantillon : expected sur le cube, 1 à côté
-void check_furnace(float albedo, float expected_on_cube) {
-   const rt::Scene scene = make_cube({.albedo = {albedo, albedo, albedo}, .emission = {0, 0, 0}});
-   const rt::Bvh bvh = rt::build_bvh(scene);
-   const rt::SceneView view = make_view(scene, bvh);
-   const rt::Camera camera(
-      {.position = {2, 1.5f, 4}, .target = {0, 0, 0}, .up = {0, 1, 0}, .vertical_fov_degrees = 50},
-      kImageSize,
-      kImageSize
-   );
-
-   int hits = 0;
-   for (int y = 0; y < kImageSize; ++y) {
-      for (int x = 0; x < kImageSize; ++x) {
-         const auto pixel = static_cast<std::uint32_t>((y * kImageSize) + x);
-         for (int sample = 0; sample < kSamplesPerPixel; ++sample) {
-            rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(pixel, static_cast<std::uint32_t>(sample));
-            const rt::Ray ray = camera.generate_ray(
-               static_cast<float>(x) + rng.next_float(),
-               static_cast<float>(y) + rng.next_float()
-            );
-
-            rt::Hit hit{};
-            const bool on_cube = rt::intersect_scene(ray, view, hit);
-            hits += on_cube ? 1 : 0;
-            const float expected = on_cube ? expected_on_cube : 1.0f;
-
-            std::uint32_t ray_count = 0;
-            const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count);
-            // Cube convexe et aucune lampe : un rayon s'il rate le cube, deux s'il le touche
-            REQUIRE(ray_count == (on_cube ? 2u : 1u));
-            REQUIRE_THAT(radiance.x, Catch::Matchers::WithinAbs(expected, 1e-5));
-            REQUIRE_THAT(radiance.y, Catch::Matchers::WithinAbs(expected, 1e-5));
-            REQUIRE_THAT(radiance.z, Catch::Matchers::WithinAbs(expected, 1e-5));
-         }
+// Albédo directionnel ∫ f(wo, wi) cos θi dωi, par la méthode du point milieu en (θi, φi)
+double directional_albedo(const rt::SurfaceParams& params, rt::Vec3 wo) {
+   constexpr int kThetaSteps = 600;
+   constexpr int kPhiSteps = 300;
+   double sum = 0.0;
+   for (int i = 0; i < kThetaSteps; ++i) {
+      const double theta = (i + 0.5) * (rt::kPi / 2.0) / kThetaSteps;
+      for (int j = 0; j < kPhiSteps; ++j) {
+         const double phi = (j + 0.5) * (2.0 * rt::kPi) / kPhiSteps;
+         const rt::Vec3 wi{
+            static_cast<float>(std::sin(theta) * std::cos(phi)),
+            static_cast<float>(std::sin(theta) * std::sin(phi)),
+            static_cast<float>(std::cos(theta))
+         };
+         sum += rt::principled::eval(params, wo, wi).x * wi.z * std::sin(theta) *
+                (rt::kPi / 2.0 / kThetaSteps) * (2.0 * rt::kPi / kPhiSteps);
       }
    }
+   return sum;
+}
 
-   // Le cube doit occuper une bonne partie de l'image pour que le test ait du sens
-   CHECK(hits > kImageSize * kImageSize * kSamplesPerPixel / 10);
+// Lance des rayons fixes vers le cube sous plusieurs angles, et compare la moyenne de la lumière
+// rapportée à l'albédo directionnel attendu. Vérifie aussi les rayons qui ratent le cube.
+void check_furnace(const rt::SurfaceParams& params) {
+   const rt::Scene scene = make_cube({
+      .albedo = params.base_color,
+      .emission = {0, 0, 0},
+      .metallic = params.metallic,
+      .roughness = params.roughness,
+   });
+   const rt::Bvh bvh = rt::build_bvh(scene);
+   const rt::SceneView view = make_view(scene, bvh);
+
+   // Rayons visant la face z = 1 (normale +z) sous des angles de plus en plus rasants
+   constexpr int kSamples = 40'000;
+   for (const float angle_degrees : {0.0f, 30.0f, 60.0f, 80.0f}) {
+      const float angle = angle_degrees * rt::kPi / 180.0f;
+      const rt::Vec3 direction{std::sin(angle), 0.0f, -std::cos(angle)};
+      const rt::Ray ray{rt::Vec3{0.0f, 0.2f, 1.0f} - (direction * 3.0f), direction};
+      const rt::Vec3 wo = -direction; // dans le repère de la face, la normale est +z
+
+      double sum = 0.0;
+      for (int i = 0; i < kSamples; ++i) {
+         rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(0, static_cast<std::uint32_t>(i));
+         std::uint32_t ray_count = 0;
+         sum += rt::trace_path(ray, view, rng, ray_count).x;
+         // Cube convexe et aucune lampe : le rayon caméra, puis au plus un rebond qui s'échappe
+         REQUIRE(ray_count <= 2u);
+      }
+      const double expected = directional_albedo(params, wo);
+      INFO("angle = " << angle_degrees << "°, albédo attendu = " << expected);
+      CHECK_THAT(sum / kSamples, Catch::Matchers::WithinRel(expected, 0.01));
+   }
+
+   // Un rayon qui rate le cube voit l'environnement : exactement 1, avec un seul rayon
+   const rt::Ray miss{{5.0f, 5.0f, 5.0f}, {0.0f, 1.0f, 0.0f}};
+   rt::Pcg32 rng(1, 0);
+   std::uint32_t ray_count = 0;
+   const rt::Vec3 radiance = rt::trace_path(miss, view, rng, ray_count);
+   CHECK(radiance == rt::Vec3{1.0f, 1.0f, 1.0f});
+   CHECK(ray_count == 1u);
 }
 
 } // namespace
 
-TEST_CASE("four blanc : objet d'albédo 1 invisible", "[furnace]") {
-   check_furnace(1.0f, 1.0f);
+TEST_CASE("four blanc : diélectrique blanc rugueux", "[furnace]") {
+   check_furnace({.base_color = {1, 1, 1}, .metallic = 0.0f, .roughness = 1.0f});
 }
 
-TEST_CASE("four blanc : objet d'albédo 0,5 renvoie la moitié de la lumière", "[furnace]") {
-   check_furnace(0.5f, 0.5f);
+TEST_CASE("four blanc : diélectrique gris semi-brillant", "[furnace]") {
+   check_furnace({.base_color = {0.5f, 0.5f, 0.5f}, .metallic = 0.0f, .roughness = 0.4f});
+}
+
+TEST_CASE("four blanc : métal blanc rugueux", "[furnace]") {
+   check_furnace({.base_color = {1, 1, 1}, .metallic = 1.0f, .roughness = 0.6f});
 }
 
 TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
