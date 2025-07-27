@@ -4,6 +4,7 @@
 #include "core/bvh.h"
 #include "core/environment.h"
 #include "core/host_device.h"
+#include "core/light.h"
 #include "core/material.h"
 #include "core/ray.h"
 #include "core/texture.h"
@@ -24,6 +25,8 @@ struct SceneView {
    const std::uint32_t* material_indices = nullptr;
    const std::uint32_t* emissive_triangles = nullptr;
    std::uint32_t emissive_triangle_count = 0;
+   const PunctualLight* punctual_lights = nullptr;
+   std::uint32_t punctual_light_count = 0;
    const Vec2* uvs = nullptr;
    const Texture* textures = nullptr;
    const Vec3* texels = nullptr;

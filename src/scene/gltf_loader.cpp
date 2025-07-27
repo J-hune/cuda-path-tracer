@@ -2,6 +2,7 @@
 
 #include "core/camera.h"
 #include "core/color.h"
+#include "core/light.h"
 #include "core/material.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
@@ -54,7 +55,8 @@ std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::pa
    constexpr auto kExtensions = fastgltf::Extensions::KHR_materials_emissive_strength |
                                 fastgltf::Extensions::KHR_materials_transmission |
                                 fastgltf::Extensions::KHR_materials_ior |
-                                fastgltf::Extensions::KHR_materials_volume;
+                                fastgltf::Extensions::KHR_materials_volume |
+                                fastgltf::Extensions::KHR_lights_punctual;
    fastgltf::Parser parser(kExtensions);
    auto asset = parser.loadGltf(
       data.get(),
@@ -235,6 +237,35 @@ std::expected<const fastgltf::Accessor*, std::string> find_attribute(
    return &accessor;
 }
 
+// Lumière ponctuelle glTF. Les intensités glTF sont photométriques (candela, lux) ; le moteur
+// travaille en unités radiométriques (W/sr, W/m²), avec l'équivalence standard de 683 lm/W
+PunctualLight load_light(const fastgltf::Light& light, const Matrix& matrix) {
+   constexpr float kLumensPerWatt = 683.0f;
+   const float intensity = static_cast<float>(light.intensity) / kLumensPerWatt;
+   PunctualLight result{
+      .position = transform(matrix, 0.f, 0.f, 0.f, 1.f),
+      .direction = normalize(transform(matrix, 0.f, 0.f, -1.f, 0.f)),
+      .intensity = Vec3{light.color.x(), light.color.y(), light.color.z()} * intensity,
+   };
+   switch (light.type) {
+      case fastgltf::LightType::Point:
+         result.type = PunctualLight::Type::Point;
+         break;
+      case fastgltf::LightType::Directional:
+         result.type = PunctualLight::Type::Directional;
+         break;
+      case fastgltf::LightType::Spot:
+         // Valeurs par défaut de glTF : cône intérieur de 0, cône extérieur de π/4
+         result.type = PunctualLight::Type::Spot;
+         result.cos_inner = std::cos(static_cast<float>(light.innerConeAngle.value_or(0.0f)));
+         result.cos_outer = std::cos(
+            static_cast<float>(light.outerConeAngle.value_or(std::numbers::pi_v<float> / 4))
+         );
+         break;
+   }
+   return result;
+}
+
 // Ajoute les sommets (en coordonnées monde), les UV, les indices et les matériaux d'une primitive
 std::expected<void, std::string> load_primitive(
    const fastgltf::Asset& asset,
@@ -352,6 +383,10 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
                return;
             }
             scene.camera = *camera;
+         }
+
+         if (node.lightIndex.has_value()) {
+            scene.punctual_lights.push_back(load_light(asset.lights[*node.lightIndex], matrix));
          }
 
          if (!node.meshIndex.has_value()) {

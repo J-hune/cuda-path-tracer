@@ -2,6 +2,7 @@
 
 #include "core/camera.h"
 #include "core/environment.h"
+#include "core/light.h"
 #include "core/material.h"
 #include "core/texture.h"
 #include "core/vec2.h"
@@ -23,6 +24,7 @@ struct Scene {
    std::vector<Material> materials;
    std::vector<std::uint32_t> material_indices;
    std::vector<std::uint32_t> emissive_triangles;
+   std::vector<PunctualLight> punctual_lights;
    std::vector<Texture> textures;
    std::vector<Vec3> texels;
    Environment environment;

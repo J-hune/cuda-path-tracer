@@ -1,6 +1,7 @@
 #include "core/bvh.h"
 #include "core/camera.h"
 #include "core/environment.h"
+#include "core/light.h"
 #include "core/material.h"
 #include "core/path_tracer.h"
 #include "core/ray.h"
@@ -92,6 +93,7 @@ struct Renderer::Impl {
       materials(scene.materials.size()),
       material_indices(scene.material_indices.size()),
       emissive_triangles(scene.emissive_triangles.size()),
+      punctual_lights(scene.punctual_lights.size()),
       uvs(scene.uvs.size()),
       textures(scene.textures.size()),
       texels(scene.texels.size()),
@@ -104,6 +106,7 @@ struct Renderer::Impl {
       materials.upload(scene.materials);
       material_indices.upload(scene.material_indices);
       emissive_triangles.upload(scene.emissive_triangles);
+      punctual_lights.upload(scene.punctual_lights);
       uvs.upload(scene.uvs);
       textures.upload(scene.textures);
       texels.upload(scene.texels);
@@ -119,6 +122,8 @@ struct Renderer::Impl {
          .material_indices = material_indices.data(),
          .emissive_triangles = emissive_triangles.data(),
          .emissive_triangle_count = static_cast<std::uint32_t>(emissive_triangles.size()),
+         .punctual_lights = punctual_lights.data(),
+         .punctual_light_count = static_cast<std::uint32_t>(punctual_lights.size()),
          .uvs = uvs.data(),
          .textures = textures.data(),
          .texels = texels.data(),
@@ -136,6 +141,7 @@ struct Renderer::Impl {
    DeviceBuffer<rt::Material> materials;
    DeviceBuffer<std::uint32_t> material_indices;
    DeviceBuffer<std::uint32_t> emissive_triangles;
+   DeviceBuffer<rt::PunctualLight> punctual_lights;
    DeviceBuffer<rt::Vec2> uvs;
    DeviceBuffer<rt::Texture> textures;
    DeviceBuffer<rt::Vec3> texels;

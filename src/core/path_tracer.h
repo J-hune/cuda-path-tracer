@@ -4,6 +4,7 @@
 #include "core/dielectric.h"
 #include "core/frame.h"
 #include "core/host_device.h"
+#include "core/light.h"
 #include "core/material.h"
 #include "core/ray.h"
 #include "core/rng.h"
@@ -21,6 +22,8 @@ namespace rt {
 inline constexpr int kRouletteStart = 3;
 inline constexpr int kMaxBounces = 64;
 inline constexpr float kRayOffset = 1e-3f;
+// Distance jusqu'à laquelle on cherche un obstacle vers une lumière directionnelle (à l'infini)
+inline constexpr float kDirectionalLightDistance = 1e6f;
 
 // Normale géométrique du triangle, dans le sens donné par l'ordre des sommets (vers l'extérieur
 // pour un maillage fermé orienté comme le veut glTF)
@@ -56,8 +59,14 @@ RT_HOST_DEVICE inline float power_heuristic(float a, float b) {
    return a2 + b2 > 0.0f ? a2 / (a2 + b2) : 0.0f;
 }
 
+// Nombre de lumières parmi lesquelles l'éclairage direct choisit : triangles émissifs et
+// ponctuelles
+RT_HOST_DEVICE constexpr std::uint32_t light_count(const SceneView& view) {
+   return view.emissive_triangle_count + view.punctual_light_count;
+}
+
 // Densité, par unité d'angle solide vue depuis le point éclairé, de tirer ce point d'une lampe
-// avec direct_light : 1 / (aire × nombre de lampes), convertie par distance² / cos θ_lampe
+// avec direct_light : 1 / (aire × nombre de lumières), convertie par distance² / cos θ_lampe
 RT_HOST_DEVICE inline float light_pdf(
    SceneView view,
    std::uint32_t triangle,
@@ -73,8 +82,7 @@ RT_HOST_DEVICE inline float light_pdf(
    if (cos_light <= 0.0f || area <= 0.0f) {
       return 0.0f;
    }
-   return distance * distance /
-          (cos_light * area * static_cast<float>(view.emissive_triangle_count));
+   return distance * distance / (cos_light * area * static_cast<float>(light_count(view)));
 }
 
 // Surface au point x : repère local (normale orientée vers l'observateur), direction d'observation
@@ -86,27 +94,17 @@ struct ShadingPoint {
    SurfaceParams params;
 };
 
-// ray_count est incrémenté du nombre de rayons lancés (le rayon d'ombre)
-RT_HOST_DEVICE inline Vec3 direct_light(
+// Éclairage direct par un triangle émissif, pondéré par MIS face au tirage de la BSDF
+RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    SceneView view,
    const ShadingPoint& shading,
+   std::uint32_t triangle,
    Pcg32& rng,
    std::uint32_t& ray_count
 ) {
-   if (view.emissive_triangle_count == 0) {
-      return Vec3{0.0f, 0.0f, 0.0f};
-   }
-
-   // Choix uniforme d'une lampe, index borné à count - 1
-   const auto picked = static_cast<std::uint32_t>(
-      rng.next_float() * static_cast<float>(view.emissive_triangle_count)
-   );
-   const std::uint32_t k = picked < view.emissive_triangle_count ? picked
-                                                                 : view.emissive_triangle_count - 1;
-   const std::uint32_t tri = view.emissive_triangles[k];
-   const Vec3 v0 = view.positions[view.indices[(3 * tri) + 0]];
-   const Vec3 v1 = view.positions[view.indices[(3 * tri) + 1]];
-   const Vec3 v2 = view.positions[view.indices[(3 * tri) + 2]];
+   const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
+   const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
+   const Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
    const Vec3 y = sample_point_on_triangle(v0, v1, v2, rng);
 
    const Vec3 cross_l = cross(v1 - v0, v2 - v0);
@@ -133,17 +131,80 @@ RT_HOST_DEVICE inline Vec3 direct_light(
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
-   const Material material = view.materials[view.material_indices[tri]];
-   // Densité du point tiré = 1 / (aire × nombre de lampes), ramenée en angle solide par d² / cos_y
-   const float pdf_light = d2 / (cos_y * area * static_cast<float>(view.emissive_triangle_count));
-   const float
-      weight = view.use_mis
-                  ? power_heuristic(
-                       pdf_light,
-                       principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi))
-                    )
-                  : 1.0f;
+   const Material material = view.materials[view.material_indices[triangle]];
+   // Densité du point tiré = 1 / (aire × nombre de lumières), ramenée en angle solide par d² /
+   // cos_y
+   const float pdf_light = d2 / (cos_y * area * static_cast<float>(light_count(view)));
+   const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
+   const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
    return f * material.emission * (cos_x * weight / pdf_light);
+}
+
+// Éclairage direct par une lumière ponctuelle. Sans surface, elle ne peut pas être touchée par un
+// rebond : pas de MIS, toute la contribution vient d'ici
+RT_HOST_DEVICE inline Vec3 direct_from_punctual(
+   SceneView view,
+   const ShadingPoint& shading,
+   const PunctualLight& light,
+   std::uint32_t& ray_count
+) {
+   const Vec3 x = shading.position;
+   const Vec3 n = shading.frame.normal;
+
+   Vec3 wi{0.0f, 0.0f, 0.0f};
+   Vec3 irradiance{0.0f, 0.0f, 0.0f}; // éclairement reçu perpendiculairement à wi
+   Vec3 target{0.0f, 0.0f, 0.0f};
+   if (light.type == PunctualLight::Type::Directional) {
+      wi = -light.direction;
+      irradiance = light.intensity;
+      target = x + (wi * kDirectionalLightDistance);
+   } else {
+      const Vec3 to_light = light.position - x;
+      const float d2 = length_squared(to_light);
+      wi = to_light / std::sqrt(d2);
+      irradiance = light.intensity / d2;
+      if (light.type == PunctualLight::Type::Spot) {
+         irradiance *= spot_attenuation(light, -wi);
+      }
+      target = light.position;
+   }
+
+   const float cos_x = dot(n, wi);
+   if (cos_x <= 0.0f || max_component(irradiance) <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   if (max_component(f) <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   ++ray_count;
+   if (is_occluded(view, x + (n * kRayOffset), target)) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   // Lumière choisie avec la probabilité 1 / nombre de lumières
+   return f * irradiance * (cos_x * static_cast<float>(light_count(view)));
+}
+
+// Éclairage direct : choisit uniformément une lumière (triangle émissif ou ponctuelle).
+// ray_count est incrémenté du nombre de rayons lancés (le rayon d'ombre)
+RT_HOST_DEVICE inline Vec3 direct_light(
+   SceneView view,
+   const ShadingPoint& shading,
+   Pcg32& rng,
+   std::uint32_t& ray_count
+) {
+   const std::uint32_t count = light_count(view);
+   if (count == 0) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   // Choix uniforme, index borné à count - 1 (l'arrondi en float peut donner count)
+   const auto picked = static_cast<std::uint32_t>(rng.next_float() * static_cast<float>(count));
+   const std::uint32_t k = picked < count ? picked : count - 1;
+   if (k < view.emissive_triangle_count) {
+      return direct_from_triangle(view, shading, view.emissive_triangles[k], rng, ray_count);
+   }
+   const PunctualLight& light = view.punctual_lights[k - view.emissive_triangle_count];
+   return direct_from_punctual(view, shading, light, ray_count);
 }
 
 // Coordonnées de texture au point touché, interpolées entre les trois sommets
