@@ -49,6 +49,34 @@ RT_HOST_DEVICE inline bool is_occluded(SceneView view, Vec3 origin, Vec3 target)
 }
 
 // Échantillonne un triangle émissif au hasard et calcule la contribution de la lumière directe
+// Heuristique de puissance de Veach (β = 2) : poids MIS de la stratégie de densité a face à b
+RT_HOST_DEVICE inline float power_heuristic(float a, float b) {
+   const float a2 = a * a;
+   const float b2 = b * b;
+   return a2 + b2 > 0.0f ? a2 / (a2 + b2) : 0.0f;
+}
+
+// Densité, par unité d'angle solide vue depuis le point éclairé, de tirer ce point d'une lampe
+// avec direct_light : 1 / (aire × nombre de lampes), convertie par distance² / cos θ_lampe
+RT_HOST_DEVICE inline float light_pdf(
+   SceneView view,
+   std::uint32_t triangle,
+   Vec3 direction,
+   float distance
+) {
+   const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
+   const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
+   const Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
+   const Vec3 cross_l = cross(v1 - v0, v2 - v0);
+   const float area = 0.5f * length(cross_l);
+   const float cos_light = std::fabs(dot(normalize(cross_l), direction));
+   if (cos_light <= 0.0f || area <= 0.0f) {
+      return 0.0f;
+   }
+   return distance * distance /
+          (cos_light * area * static_cast<float>(view.emissive_triangle_count));
+}
+
 // Surface au point x : repère local (normale orientée vers l'observateur), direction d'observation
 // wo dans ce repère, et paramètres de la BSDF
 struct ShadingPoint {
@@ -106,10 +134,16 @@ RT_HOST_DEVICE inline Vec3 direct_light(
    }
 
    const Material material = view.materials[view.material_indices[tri]];
-   // Densité du point tiré = 1 / (aire × nombre de lampes), ramenée en angle solide par cos_y / d²
-   const float geometry = cos_x * cos_y / d2;
-   const float inverse_pdf = area * static_cast<float>(view.emissive_triangle_count);
-   return f * material.emission * (geometry * inverse_pdf);
+   // Densité du point tiré = 1 / (aire × nombre de lampes), ramenée en angle solide par d² / cos_y
+   const float pdf_light = d2 / (cos_y * area * static_cast<float>(view.emissive_triangle_count));
+   const float
+      weight = view.use_mis
+                  ? power_heuristic(
+                       pdf_light,
+                       principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi))
+                    )
+                  : 1.0f;
+   return f * material.emission * (cos_x * weight / pdf_light);
 }
 
 // Coordonnées de texture au point touché, interpolées entre les trois sommets
@@ -144,7 +178,9 @@ RT_HOST_DEVICE inline Vec3 trace_path(
    Vec3 radiance{0.0f, 0.0f, 0.0f};
    Vec3 throughput{1.0f, 1.0f, 1.0f};
    // Après un rebond spéculaire, l'éclairage direct n'a pas été calculé : l'émission touchée compte
+   // entièrement. Après un rebond de la BSDF, elle est pondérée par MIS face à l'éclairage direct.
    bool specular_bounce = false;
+   float bsdf_pdf = 0.0f;
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       Hit hit{};
@@ -155,8 +191,13 @@ RT_HOST_DEVICE inline Vec3 trace_path(
       }
 
       const Material material = view.materials[view.material_indices[hit.triangle]];
-      if (bounce == 0 || specular_bounce) {
-         radiance += throughput * material.emission;
+      if (max_component(material.emission) > 0.0f) {
+         if (bounce == 0 || specular_bounce) {
+            radiance += throughput * material.emission;
+         } else if (view.use_mis) {
+            const float pdf_light = light_pdf(view, hit.triangle, ray.direction, hit.t);
+            radiance += throughput * material.emission * power_heuristic(bsdf_pdf, pdf_light);
+         }
       }
       const Vec3 point = ray.at(hit.t);
       const Vec3 albedo = surface_albedo(view, material, hit);
@@ -202,6 +243,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          }
          ray = {point + (n * kRayOffset), frame.to_world(bsdf.wi)};
          throughput = throughput * bsdf.weight;
+         bsdf_pdf = bsdf.pdf;
          specular_bounce = false;
       }
 

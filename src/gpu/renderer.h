@@ -40,6 +40,11 @@ public:
    // Repart de zéro (à appeler quand la caméra ou la scène change)
    void reset();
 
+   // Active ou désactive le MIS (sinon : éclairage direct seul pour les lampes), puis repart de
+   // zéro
+   void set_mis(bool enabled);
+   [[nodiscard]] bool mis() const;
+
    // Nombre d'échantillons par pixel accumulés depuis le dernier reset
    [[nodiscard]] std::uint32_t sample_count() const;
 

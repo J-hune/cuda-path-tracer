@@ -63,6 +63,8 @@ int glfw_key(Key key) {
          return GLFW_KEY_LEFT_SHIFT;
       case Key::Export:
          return GLFW_KEY_P;
+      case Key::ToggleMis:
+         return GLFW_KEY_M;
       case Key::Quit:
       case Key::Count:
          break;

@@ -19,6 +19,7 @@ enum class Key : std::uint8_t {
    Down,
    Fast,
    Export,
+   ToggleMis,
    Quit,
    Count
 };

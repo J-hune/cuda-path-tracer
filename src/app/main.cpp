@@ -117,6 +117,10 @@ int main(int argc, char** argv) {
          }
       }
 
+      if (window->was_pressed(Key::ToggleMis)) {
+         renderer.set_mis(!renderer.mis());
+      }
+
       bool moved = false;
       const rt::Vec3 direction = movement_direction(*window);
       if (direction != rt::Vec3{0.0f, 0.0f, 0.0f}) {

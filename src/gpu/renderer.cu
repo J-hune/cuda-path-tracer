@@ -123,6 +123,7 @@ struct Renderer::Impl {
          .textures = textures.data(),
          .texels = texels.data(),
          .environment = environment,
+         .use_mis = use_mis,
       };
    }
 
@@ -144,6 +145,7 @@ struct Renderer::Impl {
    GpuTimer timer;
    FrameStats last_frame;
    rt::Environment environment;
+   bool use_mis = true;
    std::optional<GlPixelBuffer> pixel_buffer;
 };
 
@@ -167,6 +169,15 @@ void Renderer::resize(int width, int height) {
    impl_->height = height;
    impl_->accumulation = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
    impl_->sample_count = 0;
+}
+
+void Renderer::set_mis(bool enabled) {
+   impl_->use_mis = enabled;
+   impl_->sample_count = 0;
+}
+
+bool Renderer::mis() const {
+   return impl_->use_mis;
 }
 
 void Renderer::reset() {

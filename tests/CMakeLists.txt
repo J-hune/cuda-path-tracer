@@ -10,6 +10,7 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
 add_executable(rt_tests
+   core/test_mis.cpp
    core/test_rng.cpp
    core/test_vec3.cpp
    core/test_ray.cpp
