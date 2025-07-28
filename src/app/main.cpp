@@ -8,10 +8,12 @@
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
 #include <iostream>
+#include <ratio>
 #include <string>
 
 namespace {
@@ -61,7 +63,21 @@ int main(int argc, char** argv) {
    std::cout << "Number of vertices: " << scene->positions.size() << '\n';
    std::cout << "Number of triangles: " << scene->indices.size() / 3 << '\n';
 
+   const auto build_start = std::chrono::steady_clock::now();
    const rt::Bvh bvh = rt::build_bvh(*scene);
+   const std::chrono::duration<double, std::milli> build_time = std::chrono::steady_clock::now() -
+                                                                build_start;
+   const rt::BvhStats stats = rt::compute_stats(bvh);
+   std::cout << std::format(
+      "BVH (SAH) : {:.0f} ms, {} nœuds, {} feuilles de {:.2f} triangles, profondeur moyenne {:.1f} "
+      "(max {})\n",
+      build_time.count(),
+      stats.node_count,
+      stats.leaf_count,
+      stats.average_leaf_size,
+      stats.average_depth,
+      stats.max_depth
+   );
 
    // La fenêtre (et son contexte OpenGL) doit exister avant le renderer, et lui survivre
    auto window = Window::create(kWidth, kHeight, "raytracer");

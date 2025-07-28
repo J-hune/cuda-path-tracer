@@ -5,8 +5,10 @@
 #include "scene/gltf_loader.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -42,8 +44,9 @@ TEST_CASE("BVH d'une scène vide", "[bvh]") {
 }
 
 TEST_CASE("BVH : chaque triangle est dans exactement une feuille", "[bvh]") {
+   const rt::BvhSplit split = GENERATE(rt::BvhSplit::Median, rt::BvhSplit::Sah);
    const rt::Scene scene = make_grid(16);
-   const rt::Bvh bvh = rt::build_bvh(scene);
+   const rt::Bvh bvh = rt::build_bvh(scene, split);
    const std::size_t triangle_count = scene.indices.size() / 3;
 
    REQUIRE(bvh.triangle_indices.size() == triangle_count);
@@ -59,8 +62,9 @@ TEST_CASE("BVH : chaque triangle est dans exactement une feuille", "[bvh]") {
 }
 
 TEST_CASE("BVH : les boîtes englobent leur contenu", "[bvh]") {
+   const rt::BvhSplit split = GENERATE(rt::BvhSplit::Median, rt::BvhSplit::Sah);
    const rt::Scene scene = make_grid(16);
-   const rt::Bvh bvh = rt::build_bvh(scene);
+   const rt::Bvh bvh = rt::build_bvh(scene, split);
 
    for (const rt::BvhNode& node : bvh.nodes) {
       if (node.count == 0) {
@@ -80,8 +84,27 @@ TEST_CASE("BVH : les boîtes englobent leur contenu", "[bvh]") {
 }
 
 TEST_CASE("BVH : les feuilles sont petites", "[bvh]") {
-   const rt::Bvh bvh = rt::build_bvh(make_grid(16));
-   for (const rt::BvhNode& node : bvh.nodes) {
-      REQUIRE(node.count <= 2);
+   // Médian : 2 triangles au plus. SAH : la feuille est choisie par le coût, 8 triangles au plus
+   for (const auto& [split, max_leaf] :
+        {std::pair{rt::BvhSplit::Median, 2u}, {rt::BvhSplit::Sah, 8u}}) {
+      const rt::Bvh bvh = rt::build_bvh(make_grid(16), split);
+      for (const rt::BvhNode& node : bvh.nodes) {
+         REQUIRE(node.count <= max_leaf);
+      }
    }
+}
+
+TEST_CASE("BVH : statistiques cohérentes", "[bvh]") {
+   const rt::Scene scene = make_grid(16);
+   const rt::Bvh bvh = rt::build_bvh(scene, rt::BvhSplit::Median);
+   const rt::BvhStats stats = rt::compute_stats(bvh);
+   // Arbre binaire complet : n feuilles pour 2n - 1 nœuds
+   CHECK(stats.node_count == bvh.nodes.size());
+   CHECK(stats.node_count == (2 * stats.leaf_count) - 1);
+   const std::size_t triangle_count = scene.indices.size() / 3;
+   CHECK(
+      stats.average_leaf_size * static_cast<double>(stats.leaf_count) ==
+      static_cast<double>(triangle_count)
+   );
+   CHECK(stats.average_depth <= static_cast<double>(stats.max_depth));
 }

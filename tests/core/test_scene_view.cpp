@@ -7,6 +7,7 @@
 #include "scene/gltf_loader.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdint>
 
@@ -59,9 +60,10 @@ bool intersect_brute_force(rt::Ray ray, const rt::Scene& scene, rt::Hit& hit) {
 } // namespace
 
 TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[scene_view]") {
+   const rt::BvhSplit split = GENERATE(rt::BvhSplit::Median, rt::BvhSplit::Sah);
    rt::Pcg32 rng(2024, 1);
    const rt::Scene scene = make_random_scene(rng);
-   const rt::Bvh bvh = rt::build_bvh(scene);
+   const rt::Bvh bvh = rt::build_bvh(scene, split);
    const rt::SceneView view{
       .nodes = bvh.nodes.data(),
       .triangle_indices = bvh.triangle_indices.data(),
