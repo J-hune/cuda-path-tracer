@@ -5,8 +5,10 @@
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 // Rendu GPU d'une scène. La scène est envoyée sur le GPU une seule fois, à la construction.
@@ -17,6 +19,22 @@ public:
    struct FrameStats {
       float milliseconds = 0.0f;
       std::uint64_t rays = 0;
+   };
+
+   // Cumul depuis le dernier redémarrage de l'accumulation (reset, resize, changement de réglage)
+   struct AccumulatedStats {
+      double milliseconds = 0.0;
+      std::uint64_t rays = 0;
+   };
+
+   // Carte graphique utilisée
+   struct DeviceInfo {
+      std::string name;
+      int compute_capability_major = 0;
+      int compute_capability_minor = 0;
+      std::size_t memory_bytes = 0;
+      int driver_version = 0;  // ex. 13030 pour CUDA 13.3
+      int runtime_version = 0; // version du runtime CUDA du programme, même format
    };
 
    Renderer(const rt::Scene& scene, const rt::Bvh& bvh, int width, int height);
@@ -49,6 +67,8 @@ public:
    [[nodiscard]] std::uint32_t sample_count() const;
 
    [[nodiscard]] FrameStats last_frame() const;
+   [[nodiscard]] AccumulatedStats accumulated() const;
+   [[nodiscard]] static DeviceInfo device_info();
 
    // Image accumulée (moyenne linéaire), copiée sur le CPU
    [[nodiscard]] std::vector<rt::Vec3> image() const;

@@ -153,6 +153,7 @@ struct Renderer::Impl {
    DeviceBuffer<unsigned long long> ray_counter{1};
    GpuTimer timer;
    FrameStats last_frame;
+   AccumulatedStats accumulated;
    rt::Environment environment;
    bool use_mis = true;
    std::optional<GlPixelBuffer> pixel_buffer;
@@ -211,6 +212,26 @@ Renderer::FrameStats Renderer::last_frame() const {
    return impl_->last_frame;
 }
 
+Renderer::AccumulatedStats Renderer::accumulated() const {
+   return impl_->accumulated;
+}
+
+Renderer::DeviceInfo Renderer::device_info() {
+   int device = 0;
+   RT_CUDA_CHECK(cudaGetDevice(&device));
+   cudaDeviceProp properties{};
+   RT_CUDA_CHECK(cudaGetDeviceProperties(&properties, device));
+   DeviceInfo info{
+      .name = properties.name,
+      .compute_capability_major = properties.major,
+      .compute_capability_minor = properties.minor,
+      .memory_bytes = properties.totalGlobalMem,
+   };
+   RT_CUDA_CHECK(cudaDriverGetVersion(&info.driver_version));
+   RT_CUDA_CHECK(cudaRuntimeGetVersion(&info.runtime_version));
+   return info;
+}
+
 void Renderer::render(const rt::Camera& camera) {
    Impl& impl = *impl_;
    const dim3 block(16, 16);
@@ -233,6 +254,11 @@ void Renderer::render(const rt::Camera& camera) {
    std::vector<unsigned long long> rays(1);
    impl.ray_counter.download(rays);
    impl.last_frame = {.milliseconds = impl.timer.elapsed_milliseconds(), .rays = rays[0]};
+   if (impl.sample_count == 1) {
+      impl.accumulated = {};
+   }
+   impl.accumulated.milliseconds += impl.last_frame.milliseconds;
+   impl.accumulated.rays += impl.last_frame.rays;
 
    if (impl.pixel_buffer) {
       const int pixel_count = impl.width * impl.height;

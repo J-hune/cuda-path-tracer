@@ -1,8 +1,11 @@
 #include "app/fly_camera.h"
 #include "app/image_io.h"
+#include "app/manifest.h"
 #include "app/window.h"
 #include "core/aabb.h"
 #include "core/camera.h"
+#include "core/path_tracer.h"
+#include "core/tonemap.h"
 #include "core/vec3.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
@@ -87,6 +90,8 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
    }
    Renderer renderer(*scene, bvh, kWidth, kHeight);
+   const Renderer::DeviceInfo device = Renderer::device_info();
+   const std::string scene_path = argv[1];
    renderer.attach_pixel_buffer(window->pixel_buffer());
 
    FlyCamera fly_camera(scene->camera.value_or(rt::CameraSettings{}));
@@ -125,14 +130,32 @@ int main(int argc, char** argv) {
          window->close();
       }
       if (window->was_pressed(Key::Export)) {
-         // PNG tone mappé (ce qu'affiche la fenêtre) et EXR linéaire, sous le même nom
+         // PNG tone mappé (ce qu'affiche la fenêtre), EXR linéaire et manifeste, sous le même nom
          const std::string base = std::format("render_{}spp", renderer.sample_count());
          const Size image_size = window->image_size();
          const std::vector<rt::Vec3> image = renderer.image();
+         const Renderer::AccumulatedStats accumulated = renderer.accumulated();
+         const RenderManifest manifest{
+            .date = current_local_time(),
+            .device = device,
+            .scene = scene_path,
+            .width = image_size.width,
+            .height = image_size.height,
+            .samples_per_pixel = renderer.sample_count(),
+            .gpu_milliseconds = accumulated.milliseconds,
+            .rays = accumulated.rays,
+            .mis = renderer.mis(),
+            .max_bounces = rt::kMaxBounces,
+            .russian_roulette_start = rt::kRouletteStart,
+            .bvh = "SAH (binning)",
+            .tone_mapping = "ACES (approximation de Stephen Hill) puis sRGB",
+            .exposure = rt::kDefaultExposure,
+         };
          const bool png = write_png(base + ".png", image, image_size.width, image_size.height);
          const bool exr = write_exr(base + ".exr", image, image_size.width, image_size.height);
-         if (png && exr) {
-            std::cout << "Image exportée : " << base << ".png et " << base << ".exr\n";
+         const bool json = write_manifest(base + ".json", manifest);
+         if (png && exr && json) {
+            std::cout << "Image exportée : " << base << ".png, .exr et .json\n";
          } else {
             std::cerr << "Échec de l'export de " << base << '\n';
          }
