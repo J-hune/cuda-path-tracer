@@ -15,6 +15,7 @@
 #include <iostream>
 #include <ratio>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -124,12 +125,16 @@ int main(int argc, char** argv) {
          window->close();
       }
       if (window->was_pressed(Key::Export)) {
-         const std::string path = std::format("render_{}spp.png", renderer.sample_count());
+         // PNG tone mappé (ce qu'affiche la fenêtre) et EXR linéaire, sous le même nom
+         const std::string base = std::format("render_{}spp", renderer.sample_count());
          const Size image_size = window->image_size();
-         if (write_png(path, renderer.image(), image_size.width, image_size.height)) {
-            std::cout << "Image exportée : " << path << '\n';
+         const std::vector<rt::Vec3> image = renderer.image();
+         const bool png = write_png(base + ".png", image, image_size.width, image_size.height);
+         const bool exr = write_exr(base + ".exr", image, image_size.width, image_size.height);
+         if (png && exr) {
+            std::cout << "Image exportée : " << base << ".png et " << base << ".exr\n";
          } else {
-            std::cerr << "Échec de l'export de " << path << '\n';
+            std::cerr << "Échec de l'export de " << base << '\n';
          }
       }
 

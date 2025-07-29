@@ -1,8 +1,9 @@
 # Build directories
 build/
 
-# Images produites par le moteur à la racine
+# Images produites par le moteur à la racine (PNG et EXR)
 /*.png
+/*.exr
 
 # Scènes Blender et glTF de travail, gardées hors du dépôt
 /scenes/
