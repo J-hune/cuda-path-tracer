@@ -1,6 +1,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "app/image_io.h"
 
+#include "core/tonemap.h"
 #include "core/vec3.h"
 
 #include <algorithm>
@@ -12,9 +13,8 @@
 
 namespace {
 
-std::uint8_t encode_channel(float linear) {
-   const float encoded = std::pow(std::clamp(linear, 0.f, 1.f), 1.f / 2.2f);
-   return static_cast<std::uint8_t>(std::lround(encoded * 255.f));
+std::uint8_t to_byte(float c) {
+   return static_cast<std::uint8_t>(std::lround(std::clamp(c, 0.f, 1.f) * 255.f));
 }
 
 } // namespace
@@ -23,9 +23,10 @@ std::vector<std::uint8_t> to_rgba8(const std::vector<rt::Vec3>& image) {
    std::vector<std::uint8_t> pixels;
    pixels.reserve(image.size() * 4);
    for (const rt::Vec3& pixel : image) {
-      pixels.push_back(encode_channel(pixel.x));
-      pixels.push_back(encode_channel(pixel.y));
-      pixels.push_back(encode_channel(pixel.z));
+      const rt::Vec3 c = rt::display_color(pixel, rt::kDefaultExposure);
+      pixels.push_back(to_byte(c.x));
+      pixels.push_back(to_byte(c.y));
+      pixels.push_back(to_byte(c.z));
       pixels.push_back(255);
    }
    return pixels;

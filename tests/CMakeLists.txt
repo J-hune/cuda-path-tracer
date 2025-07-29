@@ -25,6 +25,7 @@ add_executable(rt_tests
    core/test_ggx.cpp
    core/test_sampling.cpp
    core/test_texture.cpp
+   core/test_tonemap.cpp
    core/test_scene_view.cpp
    core/test_triangle.cpp
    scene/test_bvh.cpp

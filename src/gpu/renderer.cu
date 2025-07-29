@@ -8,6 +8,7 @@
 #include "core/rng.h"
 #include "core/scene_view.h"
 #include "core/texture.h"
+#include "core/tonemap.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
 #include "gpu/cuda_check.h"
@@ -60,12 +61,11 @@ __global__ void accumulate_kernel(
    atomicAdd(ray_counter, static_cast<unsigned long long>(ray_count));
 }
 
-__device__ unsigned char encode_channel(float linear) {
-   const float clamped = std::fmin(std::fmax(linear, 0.0f), 1.0f);
-   return static_cast<unsigned char>(std::lround(std::pow(clamped, 1.0f / 2.2f) * 255.0f));
+__device__ unsigned char to_byte(float c) {
+   return static_cast<unsigned char>(std::lround(c * 255.0f));
 }
 
-// Moyenne des échantillons accumulés -> RGBA8 encodé gamma, dans le pixel buffer affiché
+// Moyenne des échantillons accumulés -> RGBA8 (ACES puis sRGB), dans le pixel buffer affiché
 __global__ void encode_kernel(
    const rt::Vec3* accumulation,
    float inverse_sample_count,
@@ -76,8 +76,11 @@ __global__ void encode_kernel(
    if (i >= pixel_count) {
       return;
    }
-   const rt::Vec3 c = accumulation[i] * inverse_sample_count;
-   pixels[i] = make_uchar4(encode_channel(c.x), encode_channel(c.y), encode_channel(c.z), 255);
+   const rt::Vec3 c = rt::display_color(
+      accumulation[i] * inverse_sample_count,
+      rt::kDefaultExposure
+   );
+   pixels[i] = make_uchar4(to_byte(c.x), to_byte(c.y), to_byte(c.z), 255);
 }
 
 } // namespace
