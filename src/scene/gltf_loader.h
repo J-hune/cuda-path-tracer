@@ -19,6 +19,7 @@ namespace rt {
 struct Scene {
    std::vector<Vec3> positions;
    std::vector<Vec2> uvs;
+   std::vector<Vec3> normals; // par sommet ; nulle : ombrage plat
    std::vector<std::uint32_t> indices;
    std::optional<CameraSettings> camera;
    std::vector<Material> materials;

@@ -85,11 +85,44 @@ RT_HOST_DEVICE inline float light_pdf(
    return distance * distance / (cos_light * area * static_cast<float>(light_count(view)));
 }
 
+// Normale d'ombrage interpolée entre les sommets, du même côté que la normale géométrique donnée.
+// Normale géométrique si la scène n'a pas de normales ou si le triangle est en ombrage plat.
+RT_HOST_DEVICE inline Vec3 shading_normal(SceneView view, const Hit& hit, Vec3 geometric) {
+   if (view.normals == nullptr) {
+      return geometric;
+   }
+   const Vec3 n0 = view.normals[view.indices[(3 * hit.triangle) + 0]];
+   const Vec3 n1 = view.normals[view.indices[(3 * hit.triangle) + 1]];
+   const Vec3 n2 = view.normals[view.indices[(3 * hit.triangle) + 2]];
+   const Vec3 n = ((1.0f - hit.u - hit.v) * n0) + (hit.u * n1) + (hit.v * n2);
+   if (length_squared(n) < 1e-12f) {
+      return geometric;
+   }
+   const Vec3 shading = normalize(n);
+   return dot(shading, geometric) < 0.0f ? -shading : shading;
+}
+
+// Terminateur d'ombre (Chiang et al., « Taming the Shadow Terminator », 2019) : atténue la lumière
+// que la normale d'ombrage promet là où la géométrie réelle la reçoit en rasant
+RT_HOST_DEVICE inline float shadow_terminator(Vec3 geometric, Vec3 shading, Vec3 wi) {
+   const float cos_shading = dot(shading, wi);
+   const float cos_between = dot(geometric, shading);
+   if (cos_shading <= 0.0f || cos_between <= 0.0f) {
+      return 0.0f;
+   }
+   const float g = std::fmin(1.0f, dot(geometric, wi) / (cos_shading * cos_between));
+   if (g <= 0.0f) {
+      return 0.0f;
+   }
+   return (-g * g * g) + (g * g) + g;
+}
+
 // Surface au point x : repère local (normale orientée vers l'observateur), direction d'observation
 // wo dans ce repère, et paramètres de la BSDF
 struct ShadingPoint {
    Vec3 position;
-   Frame frame;
+   Vec3 geometric_normal; // orientée vers l'observateur : visibilité et décalage des rayons
+   Frame frame;           // autour de la normale d'ombrage : BSDF
    Vec3 wo;
    SurfaceParams params;
 };
@@ -113,12 +146,13 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
 
    const Vec3 x = shading.position;
    const Vec3 n = shading.frame.normal;
+   const Vec3 n_g = shading.geometric_normal;
    const float d2 = length_squared(y - x);
    const Vec3 wi = (y - x) / std::sqrt(d2);
 
    const float cos_x = dot(n, wi);
    const float cos_y = std::fabs(dot(n_l, wi));
-   if (cos_x <= 0.0f || cos_y <= 0.0f) {
+   if (cos_x <= 0.0f || cos_y <= 0.0f || dot(n_g, wi) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
@@ -127,7 +161,7 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
-   if (is_occluded(view, x + (n * kRayOffset), y)) {
+   if (is_occluded(view, x + (n_g * kRayOffset), y)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
@@ -137,7 +171,8 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    const float pdf_light = d2 / (cos_y * area * static_cast<float>(light_count(view)));
    const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
    const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
-   return f * material.emission * (cos_x * weight / pdf_light);
+   const float terminator = shadow_terminator(n_g, n, wi);
+   return f * material.emission * (cos_x * weight * terminator / pdf_light);
 }
 
 // Éclairage direct par une lumière ponctuelle. Sans surface, elle ne peut pas être touchée par un
@@ -150,6 +185,7 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
 ) {
    const Vec3 x = shading.position;
    const Vec3 n = shading.frame.normal;
+   const Vec3 n_g = shading.geometric_normal;
 
    Vec3 wi{0.0f, 0.0f, 0.0f};
    Vec3 irradiance{0.0f, 0.0f, 0.0f}; // éclairement reçu perpendiculairement à wi
@@ -170,7 +206,7 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
    }
 
    const float cos_x = dot(n, wi);
-   if (cos_x <= 0.0f || max_component(irradiance) <= 0.0f) {
+   if (cos_x <= 0.0f || dot(n_g, wi) <= 0.0f || max_component(irradiance) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
@@ -178,11 +214,12 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
-   if (is_occluded(view, x + (n * kRayOffset), target)) {
+   if (is_occluded(view, x + (n_g * kRayOffset), target)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    // Lumière choisie avec la probabilité 1 / nombre de lumières
-   return f * irradiance * (cos_x * static_cast<float>(light_count(view)));
+   const float terminator = shadow_terminator(n_g, n, wi);
+   return f * irradiance * (cos_x * terminator * static_cast<float>(light_count(view)));
 }
 
 // Éclairage direct : choisit uniformément une lumière (triangle émissif ou ponctuelle).
@@ -286,8 +323,9 @@ RT_HOST_DEVICE inline Vec3 trace_path(
             // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
             throughput = throughput * beer_lambert(material.absorption, hit.t);
          }
+         const Vec3 outward_shading = shading_normal(view, hit, outward);
          const DielectricSample
-            sample = sample_dielectric(ray.direction, outward, material.ior, rng);
+            sample = sample_dielectric(ray.direction, outward_shading, material.ior, rng);
          if (sample.transmitted) {
             throughput = throughput * albedo;
          }
@@ -296,10 +334,14 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          specular_bounce = true;
       } else {
          // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
-         const Vec3 n = facing_normal(view, hit.triangle, ray.direction);
+         const Vec3 n_g = facing_normal(view, hit.triangle, ray.direction);
+         // Normale d'ombrage, sauf si l'observateur se retrouve derrière elle
+         const Vec3 n_s = shading_normal(view, hit, n_g);
+         const Vec3 n = dot(n_s, -ray.direction) > 0.0f ? n_s : n_g;
          const Frame frame = make_frame(n);
          const ShadingPoint shading{
             .position = point,
+            .geometric_normal = n_g,
             .frame = frame,
             .wo = frame.to_local(-ray.direction),
             .params = {
@@ -316,11 +358,13 @@ RT_HOST_DEVICE inline Vec3 trace_path(
             shading.wo,
             {rng.next_float(), rng.next_float()}
          );
-         if (bsdf.pdf <= 0.0f) {
+         const Vec3 wi = frame.to_world(bsdf.wi);
+         // Une direction sous la surface réelle ne peut pas repartir de ce côté
+         if (bsdf.pdf <= 0.0f || dot(wi, n_g) <= 0.0f) {
             return radiance;
          }
-         ray = {point + (n * kRayOffset), frame.to_world(bsdf.wi)};
-         throughput = throughput * bsdf.weight;
+         ray = {point + (n_g * kRayOffset), wi};
+         throughput = throughput * bsdf.weight * shadow_terminator(n_g, n, wi);
          bsdf_pdf = bsdf.pdf;
          specular_bounce = false;
       }

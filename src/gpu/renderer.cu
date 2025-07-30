@@ -98,6 +98,7 @@ struct Renderer::Impl {
       emissive_triangles(scene.emissive_triangles.size()),
       punctual_lights(scene.punctual_lights.size()),
       uvs(scene.uvs.size()),
+      normals(scene.normals.size()),
       textures(scene.textures.size()),
       texels(scene.texels.size()),
       accumulation(static_cast<std::size_t>(width) * height),
@@ -111,6 +112,7 @@ struct Renderer::Impl {
       emissive_triangles.upload(scene.emissive_triangles);
       punctual_lights.upload(scene.punctual_lights);
       uvs.upload(scene.uvs);
+      normals.upload(scene.normals);
       textures.upload(scene.textures);
       texels.upload(scene.texels);
    }
@@ -128,6 +130,7 @@ struct Renderer::Impl {
          .punctual_lights = punctual_lights.data(),
          .punctual_light_count = static_cast<std::uint32_t>(punctual_lights.size()),
          .uvs = uvs.data(),
+         .normals = normals.size() == 0 ? nullptr : normals.data(),
          .textures = textures.data(),
          .texels = texels.data(),
          .environment = environment,
@@ -147,6 +150,7 @@ struct Renderer::Impl {
    DeviceBuffer<std::uint32_t> emissive_triangles;
    DeviceBuffer<rt::PunctualLight> punctual_lights;
    DeviceBuffer<rt::Vec2> uvs;
+   DeviceBuffer<rt::Vec3> normals;
    DeviceBuffer<rt::Texture> textures;
    DeviceBuffer<rt::Vec3> texels;
    DeviceBuffer<rt::Vec3> accumulation;

@@ -28,6 +28,7 @@ struct SceneView {
    const PunctualLight* punctual_lights = nullptr;
    std::uint32_t punctual_light_count = 0;
    const Vec2* uvs = nullptr;
+   const Vec3* normals = nullptr; // par sommet, nullptr : normales géométriques
    const Texture* textures = nullptr;
    const Vec3* texels = nullptr;
    Environment environment;

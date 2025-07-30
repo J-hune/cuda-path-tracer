@@ -36,6 +36,17 @@ Vec3 transform(const Matrix& matrix, float x, float y, float z, float w) {
    return {result.x(), result.y(), result.z()};
 }
 
+// Normale transformée par l'inverse transposée de la partie 3 × 3 de la matrice, calculée avec la
+// matrice des cofacteurs (colonnes c1 × c2, c2 × c0, c0 × c1), qui vaut det · (M⁻¹)ᵀ
+Vec3 transform_normal(const Matrix& matrix, Vec3 n) {
+   const Vec3 c0 = transform(matrix, 1.f, 0.f, 0.f, 0.f);
+   const Vec3 c1 = transform(matrix, 0.f, 1.f, 0.f, 0.f);
+   const Vec3 c2 = transform(matrix, 0.f, 0.f, 1.f, 0.f);
+   const Vec3 transformed = (cross(c1, c2) * n.x) + (cross(c2, c0) * n.y) + (cross(c0, c1) * n.z);
+   const float determinant = dot(c0, cross(c1, c2));
+   return normalize(determinant < 0.0f ? -transformed : transformed);
+}
+
 std::string describe(fastgltf::Error error) {
    return std::string(fastgltf::getErrorMessage(error));
 }
@@ -296,6 +307,14 @@ std::expected<void, std::string> load_primitive(
       return std::unexpected("TEXCOORD_0 and POSITION have different counts");
    }
 
+   const auto normals = find_attribute(asset, primitive, "NORMAL");
+   if (!normals) {
+      return std::unexpected(normals.error());
+   }
+   if (*normals != nullptr && (*normals)->count != vertex_count) {
+      return std::unexpected("NORMAL and POSITION have different counts");
+   }
+
    const fastgltf::Accessor* indices = nullptr;
    if (primitive.indicesAccessor.has_value()) {
       indices = &asset.accessors[*primitive.indicesAccessor];
@@ -318,6 +337,20 @@ std::expected<void, std::string> load_primitive(
          scene.positions.push_back(transform(matrix, p.x(), p.y(), p.z(), 1.f));
       }
    );
+
+   // Sans normales, glTF impose un ombrage plat : normale nulle, la normale géométrique sera
+   // utilisée
+   if (*normals != nullptr) {
+      fastgltf::iterateAccessor<fastgltf::math::fvec3>(
+         asset,
+         **normals,
+         [&](fastgltf::math::fvec3 n) {
+            scene.normals.push_back(transform_normal(matrix, {n.x(), n.y(), n.z()}));
+         }
+      );
+   } else {
+      scene.normals.insert(scene.normals.end(), vertex_count, Vec3{0.f, 0.f, 0.f});
+   }
 
    if (*uvs != nullptr) {
       fastgltf::iterateAccessor<fastgltf::math::fvec2>(asset, **uvs, [&](fastgltf::math::fvec2 uv) {
