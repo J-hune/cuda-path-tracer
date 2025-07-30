@@ -19,6 +19,7 @@ struct RenderManifest {
    std::uint64_t rays = 0;
 
    bool mis = true;
+   float firefly_clamp = 0.0f; // 0 : désactivé
    int max_bounces = 0;
    int russian_roulette_start = 0;
    std::string bvh;

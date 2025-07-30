@@ -132,6 +132,7 @@ struct Renderer::Impl {
          .texels = texels.data(),
          .environment = environment,
          .use_mis = use_mis,
+         .firefly_clamp = firefly_clamp,
       };
    }
 
@@ -156,6 +157,7 @@ struct Renderer::Impl {
    AccumulatedStats accumulated;
    rt::Environment environment;
    bool use_mis = true;
+   float firefly_clamp = 0.0f;
    std::optional<GlPixelBuffer> pixel_buffer;
 };
 
@@ -188,6 +190,15 @@ void Renderer::set_mis(bool enabled) {
 
 bool Renderer::mis() const {
    return impl_->use_mis;
+}
+
+void Renderer::set_firefly_clamp(float max_contribution) {
+   impl_->firefly_clamp = max_contribution;
+   impl_->sample_count = 0;
+}
+
+float Renderer::firefly_clamp() const {
+   return impl_->firefly_clamp;
 }
 
 void Renderer::reset() {

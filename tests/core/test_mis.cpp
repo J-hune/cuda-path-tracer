@@ -1,4 +1,5 @@
 #include "core/path_tracer.h"
+#include "core/vec3.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -21,4 +22,13 @@ TEST_CASE("heuristique de puissance : cas limites", "[mis]") {
    CHECK(rt::power_heuristic(0.0f, 0.0f) == 0.0f);
    // Densités égales : poids égaux
    CHECK_THAT(rt::power_heuristic(1.5f, 1.5f), WithinAbs(0.5, 1e-6));
+}
+
+TEST_CASE("écrêtage des fireflies : limite la plus grande composante, garde la teinte", "[clamp]") {
+   CHECK(rt::clamp_contribution({30, 15, 3}, 0.0f) == rt::Vec3{30, 15, 3});
+   CHECK(rt::clamp_contribution({3, 1, 0.5f}, 10.0f) == rt::Vec3{3, 1, 0.5f});
+   const rt::Vec3 clamped = rt::clamp_contribution({40, 20, 4}, 10.0f);
+   CHECK_THAT(clamped.x, WithinAbs(10.0, 1e-5));
+   CHECK_THAT(clamped.y, WithinAbs(5.0, 1e-5));
+   CHECK_THAT(clamped.z, WithinAbs(1.0, 1e-5));
 }

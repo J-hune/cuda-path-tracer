@@ -34,6 +34,8 @@ struct SceneView {
    // Combinaison de l'éclairage direct et du tirage de la BSDF par MIS (sinon : éclairage direct
    // seul)
    bool use_mis = true;
+   // Écrêtage des fireflies, 0 : désactivé
+   float firefly_clamp = 0.0f;
 };
 
 struct Hit {

@@ -191,3 +191,26 @@ TEST_CASE("lumières ponctuelles : ombre portée et somme de plusieurs lumières
    }
    CHECK_THAT(sum / kSamples, Catch::Matchers::WithinRel(static_cast<double>(expected.x), 0.02));
 }
+
+TEST_CASE("écrêtage des fireflies : l'éclairage direct n'est jamais écrêté", "[lights][clamp]") {
+   // Seuil minuscule : l'éclairage direct reste exact
+   const rt::PunctualLight light{
+      .position = {0.0f, 0.0f, 2.0f},
+      .intensity = {40.0f, 40.0f, 40.0f}
+   };
+   const TestScene t = make_scene({light}, false);
+   rt::SceneView view = t.view();
+   view.firefly_clamp = 1e-3f;
+   const rt::Ray ray{kHitPoint + rt::Vec3{0.0f, 0.0f, 0.5f}, {0.0f, 0.0f, -1.0f}};
+   rt::Pcg32 rng(1, 0);
+   std::uint32_t ray_count = 0;
+   const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count);
+
+   const rt::Vec3 to_light = light.position - kHitPoint;
+   const rt::Vec3 expected = expected_radiance(
+      rt::normalize(to_light),
+      light.intensity / rt::length_squared(to_light)
+   );
+   REQUIRE(rt::max_component(expected) > 1e-3f);
+   check_close(radiance, expected);
+}

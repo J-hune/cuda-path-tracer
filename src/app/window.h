@@ -20,6 +20,7 @@ enum class Key : std::uint8_t {
    Fast,
    Export,
    ToggleMis,
+   ToggleFireflyClamp,
    Quit,
    Count
 };

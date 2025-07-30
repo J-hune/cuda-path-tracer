@@ -145,6 +145,7 @@ int main(int argc, char** argv) {
             .gpu_milliseconds = accumulated.milliseconds,
             .rays = accumulated.rays,
             .mis = renderer.mis(),
+            .firefly_clamp = renderer.firefly_clamp(),
             .max_bounces = rt::kMaxBounces,
             .russian_roulette_start = rt::kRouletteStart,
             .bvh = "SAH (binning)",
@@ -163,6 +164,11 @@ int main(int argc, char** argv) {
 
       if (window->was_pressed(Key::ToggleMis)) {
          renderer.set_mis(!renderer.mis());
+      }
+      if (window->was_pressed(Key::ToggleFireflyClamp)) {
+         renderer.set_firefly_clamp(
+            renderer.firefly_clamp() > 0.0f ? 0.0f : rt::kDefaultFireflyClamp
+         );
       }
 
       bool moved = false;

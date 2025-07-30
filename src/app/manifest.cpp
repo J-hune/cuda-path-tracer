@@ -90,6 +90,7 @@ bool write_manifest(const std::string& path, const RenderManifest& m) {
    file << "  },\n";
    file << "  \"settings\": {\n";
    file << std::format("    \"mis\": {},\n", m.mis);
+   file << std::format("    \"firefly_clamp\": {},\n", m.firefly_clamp);
    file << std::format("    \"max_bounces\": {},\n", m.max_bounces);
    file << std::format("    \"russian_roulette_start\": {},\n", m.russian_roulette_start);
    file << std::format("    \"bvh\": {},\n", json_string(m.bvh));

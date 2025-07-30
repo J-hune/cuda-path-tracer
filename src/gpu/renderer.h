@@ -63,6 +63,10 @@ public:
    void set_mis(bool enabled);
    [[nodiscard]] bool mis() const;
 
+   // Écrêtage des fireflies (biaisé), 0 : désactivé. Repart de zéro
+   void set_firefly_clamp(float max_contribution);
+   [[nodiscard]] float firefly_clamp() const;
+
    // Nombre d'échantillons par pixel accumulés depuis le dernier reset
    [[nodiscard]] std::uint32_t sample_count() const;
 

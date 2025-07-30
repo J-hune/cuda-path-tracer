@@ -228,6 +228,17 @@ RT_HOST_DEVICE inline Vec3 surface_albedo(
    return material.albedo * sample_texture(texture, view.texels, interpolate_uv(view, hit));
 }
 
+inline constexpr float kDefaultFireflyClamp = 10.0f;
+
+// Écrêtage des fireflies (biaisé), 0 : désactivé
+RT_HOST_DEVICE inline Vec3 clamp_contribution(Vec3 contribution, float max_contribution) {
+   const float largest = max_component(contribution);
+   if (max_contribution <= 0.0f || largest <= max_contribution) {
+      return contribution;
+   }
+   return contribution * (max_contribution / largest);
+}
+
 // Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte.
 // ray_count est incrémenté du nombre de rayons lancés (rebonds et rayons d'ombre)
 RT_HOST_DEVICE inline Vec3 trace_path(
@@ -244,20 +255,25 @@ RT_HOST_DEVICE inline Vec3 trace_path(
    float bsdf_pdf = 0.0f;
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
+      // Seul l'éclairage indirect est écrêté
+      const float max_contribution = bounce > 0 ? view.firefly_clamp : 0.0f;
       Hit hit{};
       ++ray_count;
       if (!intersect_scene(ray, view, hit)) {
-         radiance += throughput * view.environment.radiance(ray.direction);
+         const Vec3 sky = throughput * view.environment.radiance(ray.direction);
+         radiance += clamp_contribution(sky, max_contribution);
          return radiance;
       }
 
       const Material material = view.materials[view.material_indices[hit.triangle]];
       if (max_component(material.emission) > 0.0f) {
          if (bounce == 0 || specular_bounce) {
-            radiance += throughput * material.emission;
+            radiance += clamp_contribution(throughput * material.emission, max_contribution);
          } else if (view.use_mis) {
             const float pdf_light = light_pdf(view, hit.triangle, ray.direction, hit.t);
-            radiance += throughput * material.emission * power_heuristic(bsdf_pdf, pdf_light);
+            const Vec3 emitted = throughput * material.emission *
+                                 power_heuristic(bsdf_pdf, pdf_light);
+            radiance += clamp_contribution(emitted, max_contribution);
          }
       }
       const Vec3 point = ray.at(hit.t);
@@ -292,7 +308,8 @@ RT_HOST_DEVICE inline Vec3 trace_path(
                .roughness = material.roughness
             },
          };
-         radiance += throughput * direct_light(view, shading, rng, ray_count);
+         const Vec3 direct = throughput * direct_light(view, shading, rng, ray_count);
+         radiance += clamp_contribution(direct, max_contribution);
 
          const BsdfSample bsdf = principled::sample(
             shading.params,
