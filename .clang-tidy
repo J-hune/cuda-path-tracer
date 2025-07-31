@@ -41,4 +41,6 @@ CheckOptions:
    - { key: readability-identifier-naming.ConstexprVariableCase, value: CamelCase }
    - { key: readability-identifier-naming.ConstexprVariablePrefix, value: k }
    - { key: readability-identifier-naming.MacroDefinitionCase, value: UPPER_CASE }
+   # L'API C d'OptiX attend des structures remises à zéro, images absentes comprises
+   - { key: bugprone-invalid-enum-default-initialization.IgnoredEnums, value: '::std::errc;::OptixPixelFormat' }
 ...
