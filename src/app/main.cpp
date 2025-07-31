@@ -45,6 +45,19 @@ rt::Vec3 movement_direction(const Window& window) {
    return direction;
 }
 
+// Couche suivante dans l'ordre couleur -> albédo -> normales
+Renderer::DisplayLayer next_layer(Renderer::DisplayLayer layer) {
+   switch (layer) {
+      case Renderer::DisplayLayer::Color:
+         return Renderer::DisplayLayer::Albedo;
+      case Renderer::DisplayLayer::Albedo:
+         return Renderer::DisplayLayer::Normal;
+      case Renderer::DisplayLayer::Normal:
+         break;
+   }
+   return Renderer::DisplayLayer::Color;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -164,6 +177,9 @@ int main(int argc, char** argv) {
 
       if (window->was_pressed(Key::ToggleMis)) {
          renderer.set_mis(!renderer.mis());
+      }
+      if (window->was_pressed(Key::CycleLayer)) {
+         renderer.set_display_layer(next_layer(renderer.display_layer()));
       }
       if (window->was_pressed(Key::ToggleFireflyClamp)) {
          renderer.set_firefly_clamp(

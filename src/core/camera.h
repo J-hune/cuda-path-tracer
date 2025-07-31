@@ -41,6 +41,12 @@ public:
       return {position_, direction};
    }
 
+   // Direction exprimée dans le repère de la caméra : x vers la droite, y vers le haut, z vers
+   // l'observateur
+   [[nodiscard]] RT_HOST_DEVICE Vec3 to_camera_space(Vec3 world) const {
+      return {dot(world, right_), dot(world, up_), -dot(world, forward_)};
+   }
+
 private:
    Vec3 position_;
    Vec3 forward_;

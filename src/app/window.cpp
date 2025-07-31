@@ -67,6 +67,8 @@ int glfw_key(Key key) {
          return GLFW_KEY_M;
       case Key::ToggleFireflyClamp:
          return GLFW_KEY_F;
+      case Key::CycleLayer:
+         return GLFW_KEY_V;
       case Key::Quit:
       case Key::Count:
          break;

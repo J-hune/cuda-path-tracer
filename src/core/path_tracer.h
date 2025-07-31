@@ -276,13 +276,20 @@ RT_HOST_DEVICE inline Vec3 clamp_contribution(Vec3 contribution, float max_contr
    return contribution * (max_contribution / largest);
 }
 
+// Couches auxiliaires du débruitage, relevées au premier point touché par le rayon caméra
+struct FirstHit {
+   Vec3 albedo{0.0f, 0.0f, 0.0f};
+   Vec3 normal{0.0f, 0.0f, 0.0f}; // normale d'ombrage, nulle si le rayon ne touche rien
+};
+
 // Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte.
 // ray_count est incrémenté du nombre de rayons lancés (rebonds et rayons d'ombre)
 RT_HOST_DEVICE inline Vec3 trace_path(
    Ray ray,
    SceneView view,
    Pcg32& rng,
-   std::uint32_t& ray_count
+   std::uint32_t& ray_count,
+   FirstHit* first_hit = nullptr
 ) {
    Vec3 radiance{0.0f, 0.0f, 0.0f};
    Vec3 throughput{1.0f, 1.0f, 1.0f};
@@ -297,6 +304,9 @@ RT_HOST_DEVICE inline Vec3 trace_path(
       Hit hit{};
       ++ray_count;
       if (!intersect_scene(ray, view, hit)) {
+         if (bounce == 0 && first_hit != nullptr) {
+            *first_hit = {.albedo = view.environment.radiance(ray.direction)};
+         }
          const Vec3 sky = throughput * view.environment.radiance(ray.direction);
          radiance += clamp_contribution(sky, max_contribution);
          return radiance;
@@ -315,6 +325,10 @@ RT_HOST_DEVICE inline Vec3 trace_path(
       }
       const Vec3 point = ray.at(hit.t);
       const Vec3 albedo = surface_albedo(view, material, hit);
+      if (bounce == 0 && first_hit != nullptr) {
+         const Vec3 facing = facing_normal(view, hit.triangle, ray.direction);
+         *first_hit = {.albedo = albedo, .normal = shading_normal(view, hit, facing)};
+      }
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
          // Surface diélectrique : réflexion ou réfraction, sans éclairage direct

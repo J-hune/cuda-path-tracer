@@ -15,6 +15,9 @@
 // Les types CUDA restent cachés dans renderer.cu (idiome pimpl) : ce fichier reste du C++ pur.
 class Renderer {
 public:
+   // Couche affichée dans la fenêtre
+   enum class DisplayLayer : std::uint8_t { Color, Albedo, Normal };
+
    // Mesures de la dernière image : temps GPU du rendu et nombre de rayons lancés
    struct FrameStats {
       float milliseconds = 0.0f;
@@ -63,6 +66,9 @@ public:
    void set_mis(bool enabled);
    [[nodiscard]] bool mis() const;
 
+   void set_display_layer(DisplayLayer layer);
+   [[nodiscard]] DisplayLayer display_layer() const;
+
    // Écrêtage des fireflies (biaisé), 0 : désactivé. Repart de zéro
    void set_firefly_clamp(float max_contribution);
    [[nodiscard]] float firefly_clamp() const;
@@ -74,8 +80,8 @@ public:
    [[nodiscard]] AccumulatedStats accumulated() const;
    [[nodiscard]] static DeviceInfo device_info();
 
-   // Image accumulée (moyenne linéaire), copiée sur le CPU
-   [[nodiscard]] std::vector<rt::Vec3> image() const;
+   // Moyenne accumulée d'une couche (couleur linéaire par défaut), copiée sur le CPU
+   [[nodiscard]] std::vector<rt::Vec3> image(DisplayLayer layer = DisplayLayer::Color) const;
 
 private:
    struct Impl;

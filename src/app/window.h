@@ -21,6 +21,7 @@ enum class Key : std::uint8_t {
    Export,
    ToggleMis,
    ToggleFireflyClamp,
+   CycleLayer,
    Quit,
    Count
 };

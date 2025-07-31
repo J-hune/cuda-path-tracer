@@ -32,10 +32,18 @@
 namespace {
 
 // Ajoute un échantillon par pixel (l'échantillon numéro sample_index) au tampon d'accumulation
+// Tampons d'accumulation : somme des échantillons de chaque pixel, pour chaque couche
+struct Accumulation {
+   rt::Vec3* color;
+   rt::Vec3* albedo;
+   rt::Vec3* normal; // dans le repère de la caméra
+};
+
+// Ajoute un échantillon par pixel (l'échantillon numéro sample_index) aux tampons d'accumulation
 __global__ void accumulate_kernel(
    rt::Camera camera,
    rt::SceneView view,
-   rt::Vec3* accumulation,
+   Accumulation accumulation,
    std::uint32_t sample_index,
    unsigned long long* ray_counter,
    int width,
@@ -56,18 +64,28 @@ __global__ void accumulate_kernel(
       static_cast<float>(y) + jitter_y
    );
    std::uint32_t ray_count = 0;
-   const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count);
-   accumulation[pixel_index] = sample_index == 0 ? radiance : accumulation[pixel_index] + radiance;
+   rt::FirstHit first_hit;
+   const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count, &first_hit);
+   const rt::Vec3 normal = camera.to_camera_space(first_hit.normal);
+
+   const auto add = [&](rt::Vec3* buffer, rt::Vec3 value) {
+      buffer[pixel_index] = sample_index == 0 ? value : buffer[pixel_index] + value;
+   };
+   add(accumulation.color, radiance);
+   add(accumulation.albedo, first_hit.albedo);
+   add(accumulation.normal, normal);
    atomicAdd(ray_counter, static_cast<unsigned long long>(ray_count));
 }
 
 __device__ unsigned char to_byte(float c) {
-   return static_cast<unsigned char>(std::lround(c * 255.0f));
+   return static_cast<unsigned char>(std::lround(std::fmin(std::fmax(c, 0.0f), 1.0f) * 255.0f));
 }
 
-// Moyenne des échantillons accumulés -> RGBA8 (ACES puis sRGB), dans le pixel buffer affiché
+// Moyenne d'une couche accumulée -> RGBA8 dans le pixel buffer affiché.
+// Couleur : ACES puis sRGB. Albédo : sRGB. Normale : [-1, 1] ramené dans [0, 1].
 __global__ void encode_kernel(
-   const rt::Vec3* accumulation,
+   const rt::Vec3* layer,
+   Renderer::DisplayLayer kind,
    float inverse_sample_count,
    uchar4* pixels,
    int pixel_count
@@ -76,10 +94,23 @@ __global__ void encode_kernel(
    if (i >= pixel_count) {
       return;
    }
-   const rt::Vec3 c = rt::display_color(
-      accumulation[i] * inverse_sample_count,
-      rt::kDefaultExposure
-   );
+   const rt::Vec3 value = layer[i] * inverse_sample_count;
+   rt::Vec3 c{0.0f, 0.0f, 0.0f};
+   switch (kind) {
+      case Renderer::DisplayLayer::Color:
+         c = rt::display_color(value, rt::kDefaultExposure);
+         break;
+      case Renderer::DisplayLayer::Albedo:
+         c = {
+            rt::linear_to_srgb(std::fmin(value.x, 1.0f)),
+            rt::linear_to_srgb(std::fmin(value.y, 1.0f)),
+            rt::linear_to_srgb(std::fmin(value.z, 1.0f))
+         };
+         break;
+      case Renderer::DisplayLayer::Normal:
+         c = (value * 0.5f) + rt::Vec3{0.5f, 0.5f, 0.5f};
+         break;
+   }
    pixels[i] = make_uchar4(to_byte(c.x), to_byte(c.y), to_byte(c.z), 255);
 }
 
@@ -102,6 +133,8 @@ struct Renderer::Impl {
       textures(scene.textures.size()),
       texels(scene.texels.size()),
       accumulation(static_cast<std::size_t>(width) * height),
+      albedo(static_cast<std::size_t>(width) * height),
+      normal(static_cast<std::size_t>(width) * height),
       environment(scene.environment) {
       nodes.upload(bvh.nodes);
       triangle_indices.upload(bvh.triangle_indices);
@@ -154,6 +187,9 @@ struct Renderer::Impl {
    DeviceBuffer<rt::Texture> textures;
    DeviceBuffer<rt::Vec3> texels;
    DeviceBuffer<rt::Vec3> accumulation;
+   DeviceBuffer<rt::Vec3> albedo;
+   DeviceBuffer<rt::Vec3> normal;
+   DisplayLayer display_layer = DisplayLayer::Color;
    std::uint32_t sample_count = 0;
    DeviceBuffer<unsigned long long> ray_counter{1};
    GpuTimer timer;
@@ -184,6 +220,8 @@ void Renderer::resize(int width, int height) {
    impl_->width = width;
    impl_->height = height;
    impl_->accumulation = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
+   impl_->albedo = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
+   impl_->normal = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
    impl_->sample_count = 0;
 }
 
@@ -205,6 +243,14 @@ float Renderer::firefly_clamp() const {
    return impl_->firefly_clamp;
 }
 
+void Renderer::set_display_layer(DisplayLayer layer) {
+   impl_->display_layer = layer;
+}
+
+Renderer::DisplayLayer Renderer::display_layer() const {
+   return impl_->display_layer;
+}
+
 void Renderer::reset() {
    impl_->sample_count = 0;
 }
@@ -213,9 +259,12 @@ std::uint32_t Renderer::sample_count() const {
    return impl_->sample_count;
 }
 
-std::vector<rt::Vec3> Renderer::image() const {
-   std::vector<rt::Vec3> pixels(impl_->accumulation.size());
-   impl_->accumulation.download(pixels);
+std::vector<rt::Vec3> Renderer::image(DisplayLayer layer) const {
+   const DeviceBuffer<rt::Vec3>& source = layer == DisplayLayer::Albedo   ? impl_->albedo
+                                          : layer == DisplayLayer::Normal ? impl_->normal
+                                                                          : impl_->accumulation;
+   std::vector<rt::Vec3> pixels(source.size());
+   source.download(pixels);
    const float inverse_count = 1.0f / static_cast<float>(impl_->sample_count);
    for (rt::Vec3& pixel : pixels) {
       pixel *= inverse_count;
@@ -256,7 +305,11 @@ void Renderer::render(const rt::Camera& camera) {
    accumulate_kernel<<<grid, block>>>(
       camera,
       impl.view(),
-      impl.accumulation.data(),
+      Accumulation{
+         .color = impl.accumulation.data(),
+         .albedo = impl.albedo.data(),
+         .normal = impl.normal.data(),
+      },
       impl.sample_count,
       impl.ray_counter.data(),
       impl.width,
@@ -278,8 +331,13 @@ void Renderer::render(const rt::Camera& camera) {
    if (impl.pixel_buffer) {
       const int pixel_count = impl.width * impl.height;
       const GlPixelBuffer::Mapping mapping = impl.pixel_buffer->map();
+      const rt::Vec3* layer = impl.display_layer == DisplayLayer::Albedo ? impl.albedo.data()
+                              : impl.display_layer == DisplayLayer::Normal
+                                 ? impl.normal.data()
+                                 : impl.accumulation.data();
       encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
-         impl.accumulation.data(),
+         layer,
+         impl.display_layer,
          1.0f / static_cast<float>(impl.sample_count),
          mapping.pixels(),
          pixel_count
