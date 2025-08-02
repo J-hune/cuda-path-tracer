@@ -12,9 +12,9 @@
 #include "scene/gltf_loader.h"
 
 #include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <format>
+#include <imgui.h>
 #include <iostream>
 #include <ratio>
 #include <string>
@@ -45,17 +45,131 @@ rt::Vec3 movement_direction(const Window& window) {
    return direction;
 }
 
-// Couche suivante dans l'ordre couleur -> albédo -> normales
-Renderer::DisplayLayer next_layer(Renderer::DisplayLayer layer) {
-   switch (layer) {
-      case Renderer::DisplayLayer::Color:
-         return Renderer::DisplayLayer::Albedo;
-      case Renderer::DisplayLayer::Albedo:
-         return Renderer::DisplayLayer::Normal;
-      case Renderer::DisplayLayer::Normal:
-         break;
+// État de l'interface qui n'appartient pas au renderer
+struct Controls {
+   float firefly_threshold = rt::kDefaultFireflyClamp;
+   bool export_requested = false;
+   std::string status; // résultat du dernier export
+};
+
+// PNG tone mappé, EXR linéaire et manifeste sous le même nom, plus l'image débruitée si le
+// débruitage est actif. Renvoie le message à afficher.
+std::string export_render(
+   Renderer& renderer,
+   const Renderer::DeviceInfo& device,
+   const std::string& scene_path,
+   Size size
+) {
+   const std::string base = std::format("render_{}spp", renderer.sample_count());
+   const Renderer::AccumulatedStats accumulated = renderer.accumulated();
+   const RenderManifest manifest{
+      .date = current_local_time(),
+      .device = device,
+      .scene = scene_path,
+      .width = size.width,
+      .height = size.height,
+      .samples_per_pixel = renderer.sample_count(),
+      .gpu_milliseconds = accumulated.milliseconds,
+      .rays = accumulated.rays,
+      .mis = renderer.mis(),
+      .firefly_clamp = renderer.firefly_clamp(),
+      .denoiser = renderer.denoiser() ? "OptiX (albédo et normales)" : "aucun",
+      .max_bounces = rt::kMaxBounces,
+      .russian_roulette_start = rt::kRouletteStart,
+      .bvh = "SAH (binning)",
+      .tone_mapping = "ACES (approximation de Stephen Hill) puis sRGB",
+      .exposure = rt::kDefaultExposure,
+   };
+   const std::vector<rt::Vec3> image = renderer.image();
+   bool ok = write_png(base + ".png", image, size.width, size.height) &&
+             write_exr(base + ".exr", image, size.width, size.height) &&
+             write_manifest(base + ".json", manifest);
+   if (renderer.denoiser()) {
+      const std::vector<rt::Vec3> denoised = renderer.denoised_image();
+      ok = ok && write_png(base + "_debruite.png", denoised, size.width, size.height) &&
+           write_exr(base + "_debruite.exr", denoised, size.width, size.height);
    }
-   return Renderer::DisplayLayer::Color;
+   return ok ? std::format("Exporté : {}", base) : std::format("Échec de l'export de {}", base);
+}
+
+void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
+   ImGui::SetNextWindowPos({10.0f, 10.0f}, ImGuiCond_FirstUseEver);
+   ImGui::Begin("Rendu", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+   const ImGuiIO& io = ImGui::GetIO();
+   const Renderer::AccumulatedStats accumulated = renderer.accumulated();
+   const double mrays_per_second = accumulated.milliseconds > 0.0
+                                      ? static_cast<double>(accumulated.rays) /
+                                           (accumulated.milliseconds * 1e3)
+                                      : 0.0;
+   ImGui::Text("%.0f FPS (%.1f ms)", io.Framerate, 1000.0f / io.Framerate);
+   ImGui::Text("%d × %d pixels", image_size.width, image_size.height);
+   ImGui::Text("%u spp", renderer.sample_count());
+   ImGui::Text("%.0f Mrays/s", mrays_per_second);
+
+   ImGui::SeparatorText("Réglages");
+   bool mis = renderer.mis();
+   if (ImGui::Checkbox("MIS (M)", &mis)) {
+      renderer.set_mis(mis);
+   }
+   bool clamp = renderer.firefly_clamp() > 0.0f;
+   if (ImGui::Checkbox("Firefly clamp", &clamp)) {
+      renderer.set_firefly_clamp(clamp ? controls.firefly_threshold : 0.0f);
+   }
+   if (clamp && ImGui::SliderFloat(
+                   "Seuil",
+                   &controls.firefly_threshold,
+                   1.0f,
+                   100.0f,
+                   "%.1f",
+                   ImGuiSliderFlags_Logarithmic
+                )) {
+      renderer.set_firefly_clamp(controls.firefly_threshold);
+   }
+   bool denoise = renderer.denoiser();
+   if (ImGui::Checkbox("Denoiser OptiX", &denoise)) {
+      renderer.set_denoiser(denoise);
+   }
+   int layer = static_cast<int>(renderer.display_layer());
+   if (ImGui::Combo("AOV", &layer, "Beauty\0Albedo\0Normal\0")) {
+      renderer.set_display_layer(static_cast<Renderer::DisplayLayer>(layer));
+   }
+
+   ImGui::SeparatorText("Export");
+   if (ImGui::Button("Exporter (P)")) {
+      controls.export_requested = true;
+   }
+   if (!controls.status.empty()) {
+      ImGui::TextUnformatted(controls.status.c_str());
+   }
+
+   ImGui::SeparatorText("Commandes");
+   ImGui::TextUnformatted(
+      "ZQSD : se déplacer\n"
+      "Espace, Ctrl : monter, descendre\n"
+      "Maj : plus vite\n"
+      "Clic droit : regarder\n"
+      "Échap : quitter"
+   );
+   ImGui::End();
+}
+
+// Raccourcis selon la lettre imprimée sur la touche : ImGui traduit les touches GLFW selon la
+// disposition du clavier
+void handle_shortcuts(Window& window, Renderer& renderer, Controls& controls) {
+   if (ImGui::GetIO().WantCaptureKeyboard) {
+      return;
+   }
+   const auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
+   if (pressed(ImGuiKey_Escape)) {
+      window.close();
+   }
+   if (pressed(ImGuiKey_P)) {
+      controls.export_requested = true;
+   }
+   if (pressed(ImGuiKey_M)) {
+      renderer.set_mis(!renderer.mis());
+   }
 }
 
 } // namespace
@@ -113,17 +227,17 @@ int main(int argc, char** argv) {
    const float move_speed = 0.25f * scene_extent(*scene);
 
    double last_time = Window::time();
-   double stats_start = last_time;
-   std::uint64_t stats_rays = 0;
-   double stats_milliseconds = 0.0;
+   Controls controls;
    CursorPosition last_cursor = window->cursor_position();
    while (!window->should_close()) {
       Window::poll_events();
+      Window::begin_frame();
 
       // Redimensionnement : l'enregistrement CUDA doit être libéré avant qu'OpenGL ne réalloue
       // le pixel buffer, puis refait sur le nouveau
       const Size size = window->framebuffer_size();
       if (size.width == 0 || size.height == 0) {
+         ImGui::EndFrame();
          Window::wait_events();
          continue;
       }
@@ -139,52 +253,11 @@ int main(int argc, char** argv) {
       const auto delta_time = static_cast<float>(now - last_time);
       last_time = now;
 
-      if (window->was_pressed(Key::Quit)) {
-         window->close();
-      }
-      if (window->was_pressed(Key::Export)) {
-         // PNG tone mappé (ce qu'affiche la fenêtre), EXR linéaire et manifeste, sous le même nom
-         const std::string base = std::format("render_{}spp", renderer.sample_count());
-         const Size image_size = window->image_size();
-         const std::vector<rt::Vec3> image = renderer.image();
-         const Renderer::AccumulatedStats accumulated = renderer.accumulated();
-         const RenderManifest manifest{
-            .date = current_local_time(),
-            .device = device,
-            .scene = scene_path,
-            .width = image_size.width,
-            .height = image_size.height,
-            .samples_per_pixel = renderer.sample_count(),
-            .gpu_milliseconds = accumulated.milliseconds,
-            .rays = accumulated.rays,
-            .mis = renderer.mis(),
-            .firefly_clamp = renderer.firefly_clamp(),
-            .max_bounces = rt::kMaxBounces,
-            .russian_roulette_start = rt::kRouletteStart,
-            .bvh = "SAH (binning)",
-            .tone_mapping = "ACES (approximation de Stephen Hill) puis sRGB",
-            .exposure = rt::kDefaultExposure,
-         };
-         const bool png = write_png(base + ".png", image, image_size.width, image_size.height);
-         const bool exr = write_exr(base + ".exr", image, image_size.width, image_size.height);
-         const bool json = write_manifest(base + ".json", manifest);
-         if (png && exr && json) {
-            std::cout << "Image exportée : " << base << ".png, .exr et .json\n";
-         } else {
-            std::cerr << "Échec de l'export de " << base << '\n';
-         }
-      }
-
-      if (window->was_pressed(Key::ToggleMis)) {
-         renderer.set_mis(!renderer.mis());
-      }
-      if (window->was_pressed(Key::CycleLayer)) {
-         renderer.set_display_layer(next_layer(renderer.display_layer()));
-      }
-      if (window->was_pressed(Key::ToggleFireflyClamp)) {
-         renderer.set_firefly_clamp(
-            renderer.firefly_clamp() > 0.0f ? 0.0f : rt::kDefaultFireflyClamp
-         );
+      draw_panel(renderer, controls, window->image_size());
+      handle_shortcuts(*window, renderer, controls);
+      if (controls.export_requested) {
+         controls.status = export_render(renderer, device, scene_path, window->image_size());
+         controls.export_requested = false;
       }
 
       bool moved = false;
@@ -212,24 +285,6 @@ int main(int argc, char** argv) {
 
       renderer.render(camera);
       window->present();
-      // Débit moyenné sur une demi-seconde, pour un affichage lisible
-      const Renderer::FrameStats frame = renderer.last_frame();
-      stats_rays += frame.rays;
-      stats_milliseconds += frame.milliseconds;
-      if (now - stats_start >= 0.5) {
-         const double mrays_per_second = static_cast<double>(stats_rays) /
-                                         (stats_milliseconds * 1e3);
-         window->set_title(
-            std::format(
-               "raytracer - {} spp - {:.0f} Mrayons/s",
-               renderer.sample_count(),
-               mrays_per_second
-            )
-         );
-         stats_start = now;
-         stats_rays = 0;
-         stats_milliseconds = 0.0;
-      }
    }
 
    return EXIT_SUCCESS;

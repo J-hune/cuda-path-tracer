@@ -73,6 +73,10 @@ public:
    void set_firefly_clamp(float max_contribution);
    [[nodiscard]] float firefly_clamp() const;
 
+   // Débruiteur OptiX sur la couche couleur affichée, relancé à intervalles croissants
+   void set_denoiser(bool enabled);
+   [[nodiscard]] bool denoiser() const;
+
    // Nombre d'échantillons par pixel accumulés depuis le dernier reset
    [[nodiscard]] std::uint32_t sample_count() const;
 
@@ -82,6 +86,8 @@ public:
 
    // Moyenne accumulée d'une couche (couleur linéaire par défaut), copiée sur le CPU
    [[nodiscard]] std::vector<rt::Vec3> image(DisplayLayer layer = DisplayLayer::Color) const;
+   // Couleur accumulée actuelle, débruitée (vide si rien n'est accumulé)
+   [[nodiscard]] std::vector<rt::Vec3> denoised_image();
 
 private:
    struct Impl;

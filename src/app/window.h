@@ -1,30 +1,14 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <string>
 
 struct GLFWwindow;
 
-// Touches utilisées, désignées par leur rôle. Les touches GLFW correspondent à une position
-// physique : Forward est la touche W d'un clavier QWERTY, donc Z sur un clavier AZERTY.
-enum class Key : std::uint8_t {
-   Forward,
-   Backward,
-   Left,
-   Right,
-   Up,
-   Down,
-   Fast,
-   Export,
-   ToggleMis,
-   ToggleFireflyClamp,
-   CycleLayer,
-   Quit,
-   Count
-};
+// Touches de déplacement, par position physique : Forward est la touche W d'un clavier QWERTY,
+// donc Z sur un clavier AZERTY
+enum class Key : std::uint8_t { Forward, Backward, Left, Right, Up, Down, Fast };
 
 struct Size {
    int width = 0;
@@ -37,9 +21,9 @@ struct CursorPosition {
    double y = 0.0;
 };
 
-// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8 de taille fixe.
-// L'image est lue dans un pixel buffer OpenGL, que CUDA peut remplir directement.
-// Une seule fenêtre par programme : elle initialise et termine GLFW.
+// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8 de taille fixe et l'interface
+// ImGui par-dessus. L'image est lue dans un pixel buffer OpenGL, que CUDA peut remplir directement.
+// Une seule fenêtre par programme : elle initialise et termine GLFW et ImGui.
 class Window {
 public:
    static std::expected<Window, std::string> create(
@@ -58,12 +42,13 @@ public:
    static void poll_events();
    // Attend le prochain événement (fenêtre réduite : inutile de rendre)
    static void wait_events();
-   void set_title(const std::string& title);
 
    // Pixel buffer OpenGL de width × height pixels RGBA8, ligne 0 en haut
    [[nodiscard]] unsigned int pixel_buffer() const noexcept { return pixel_buffer_; }
 
-   // Affiche le contenu actuel du pixel buffer
+   // Commence l'image de l'interface : les appels ImGui se font entre begin_frame() et present()
+   static void begin_frame();
+   // Affiche le contenu actuel du pixel buffer, puis l'interface
    void present();
 
    // Taille actuelle de la zone de dessin, en pixels (0 × 0 si la fenêtre est réduite)
@@ -76,9 +61,7 @@ public:
 
    // Entrées clavier et souris, à jour après poll_events()
    [[nodiscard]] bool is_down(Key key) const;
-   // Vrai une seule fois par appui, au moment où la touche s'enfonce
-   [[nodiscard]] bool was_pressed(Key key);
-   [[nodiscard]] bool is_looking() const; // clic droit maintenu
+   [[nodiscard]] bool is_looking() const; // clic droit maintenu hors de l'interface
    [[nodiscard]] CursorPosition cursor_position() const;
    void close();
 
@@ -94,5 +77,4 @@ private:
    unsigned int pixel_buffer_ = 0;
    int width_ = 0;
    int height_ = 0;
-   std::array<bool, static_cast<std::size_t>(Key::Count)> was_down_{};
 };

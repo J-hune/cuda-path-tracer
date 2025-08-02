@@ -12,6 +12,7 @@
 #include "core/vec2.h"
 #include "core/vec3.h"
 #include "gpu/cuda_check.h"
+#include "gpu/denoiser.h"
 #include "gpu/device_buffer.h"
 #include "gpu/gl_pixel_buffer.h"
 #include "gpu/gpu_timer.h"
@@ -21,6 +22,7 @@
 
 #include <cuda_runtime.h>
 
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -75,6 +77,28 @@ __global__ void accumulate_kernel(
    add(accumulation.albedo, first_hit.albedo);
    add(accumulation.normal, normal);
    atomicAdd(ray_counter, static_cast<unsigned long long>(ray_count));
+}
+
+// Moyenne des trois couches accumulées, entrée du débruiteur
+__global__ void average_kernel(
+   Accumulation sums,
+   Accumulation means,
+   float inverse_sample_count,
+   int pixel_count
+) {
+   const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+   if (i >= pixel_count) {
+      return;
+   }
+   means.color[i] = sums.color[i] * inverse_sample_count;
+   means.albedo[i] = sums.albedo[i] * inverse_sample_count;
+   means.normal[i] = sums.normal[i] * inverse_sample_count;
+}
+
+// Débruitage aux échantillons 1, 2, 4, …, 64, puis tous les 64 : l'image se nettoie vite au
+// début, et le coût reste faible ensuite
+bool is_denoising_step(std::uint32_t sample_count) {
+   return std::has_single_bit(sample_count) || sample_count % 64 == 0;
 }
 
 __device__ unsigned char to_byte(float c) {
@@ -199,6 +223,55 @@ struct Renderer::Impl {
    bool use_mis = true;
    float firefly_clamp = 0.0f;
    std::optional<GlPixelBuffer> pixel_buffer;
+
+   // Débruiteur et ses images, créés à la première utilisation
+   struct Denoising {
+      Denoising(int width, int height):
+         denoiser(width, height),
+         color(static_cast<std::size_t>(width) * height),
+         albedo(static_cast<std::size_t>(width) * height),
+         normal(static_cast<std::size_t>(width) * height),
+         output(static_cast<std::size_t>(width) * height) {}
+
+      Denoiser denoiser;
+      DeviceBuffer<rt::Vec3> color;
+      DeviceBuffer<rt::Vec3> albedo;
+      DeviceBuffer<rt::Vec3> normal;
+      DeviceBuffer<rt::Vec3> output;
+   };
+   bool denoise = false;
+   std::optional<Denoising> denoising;
+   std::uint32_t denoised_sample_count = 0; // 0 : pas d'image débruitée depuis le reset
+
+   [[nodiscard]] Accumulation sums() {
+      return {.color = accumulation.data(), .albedo = albedo.data(), .normal = normal.data()};
+   }
+
+   // Débruite la moyenne accumulée actuelle dans denoising->output
+   void run_denoiser() {
+      if (!denoising) {
+         denoising.emplace(width, height);
+      }
+      const int pixel_count = width * height;
+      average_kernel<<<(pixel_count + 255) / 256, 256>>>(
+         sums(),
+         Accumulation{
+            .color = denoising->color.data(),
+            .albedo = denoising->albedo.data(),
+            .normal = denoising->normal.data(),
+         },
+         1.0f / static_cast<float>(sample_count),
+         pixel_count
+      );
+      RT_CUDA_CHECK_LAUNCH();
+      denoising->denoiser.denoise(
+         denoising->color.data(),
+         denoising->albedo.data(),
+         denoising->normal.data(),
+         denoising->output.data()
+      );
+      denoised_sample_count = sample_count;
+   }
 };
 
 Renderer::Renderer(const rt::Scene& scene, const rt::Bvh& bvh, int width, int height):
@@ -222,12 +295,13 @@ void Renderer::resize(int width, int height) {
    impl_->accumulation = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
    impl_->albedo = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
    impl_->normal = DeviceBuffer<rt::Vec3>(static_cast<std::size_t>(width) * height);
-   impl_->sample_count = 0;
+   impl_->denoising.reset();
+   reset();
 }
 
 void Renderer::set_mis(bool enabled) {
    impl_->use_mis = enabled;
-   impl_->sample_count = 0;
+   reset();
 }
 
 bool Renderer::mis() const {
@@ -236,7 +310,7 @@ bool Renderer::mis() const {
 
 void Renderer::set_firefly_clamp(float max_contribution) {
    impl_->firefly_clamp = max_contribution;
-   impl_->sample_count = 0;
+   reset();
 }
 
 float Renderer::firefly_clamp() const {
@@ -245,6 +319,7 @@ float Renderer::firefly_clamp() const {
 
 void Renderer::set_display_layer(DisplayLayer layer) {
    impl_->display_layer = layer;
+   impl_->denoised_sample_count = 0;
 }
 
 Renderer::DisplayLayer Renderer::display_layer() const {
@@ -253,6 +328,28 @@ Renderer::DisplayLayer Renderer::display_layer() const {
 
 void Renderer::reset() {
    impl_->sample_count = 0;
+   impl_->denoised_sample_count = 0;
+}
+
+void Renderer::set_denoiser(bool enabled) {
+   impl_->denoise = enabled;
+   impl_->denoised_sample_count = 0;
+}
+
+bool Renderer::denoiser() const {
+   return impl_->denoise;
+}
+
+std::vector<rt::Vec3> Renderer::denoised_image() {
+   if (impl_->sample_count == 0) {
+      return {};
+   }
+   if (impl_->denoised_sample_count != impl_->sample_count) {
+      impl_->run_denoiser();
+   }
+   std::vector<rt::Vec3> pixels(impl_->denoising->output.size());
+   impl_->denoising->output.download(pixels);
+   return pixels;
 }
 
 std::uint32_t Renderer::sample_count() const {
@@ -305,11 +402,7 @@ void Renderer::render(const rt::Camera& camera) {
    accumulate_kernel<<<grid, block>>>(
       camera,
       impl.view(),
-      Accumulation{
-         .color = impl.accumulation.data(),
-         .albedo = impl.albedo.data(),
-         .normal = impl.normal.data(),
-      },
+      impl.sums(),
       impl.sample_count,
       impl.ray_counter.data(),
       impl.width,
@@ -328,17 +421,24 @@ void Renderer::render(const rt::Camera& camera) {
    impl.accumulated.milliseconds += impl.last_frame.milliseconds;
    impl.accumulated.rays += impl.last_frame.rays;
 
+   const bool show_denoised = impl.denoise && impl.display_layer == DisplayLayer::Color;
+   if (show_denoised && (impl.denoised_sample_count == 0 || is_denoising_step(impl.sample_count))) {
+      impl.run_denoiser();
+   }
+
    if (impl.pixel_buffer) {
       const int pixel_count = impl.width * impl.height;
       const GlPixelBuffer::Mapping mapping = impl.pixel_buffer->map();
-      const rt::Vec3* layer = impl.display_layer == DisplayLayer::Albedo ? impl.albedo.data()
+      const bool denoised = show_denoised && impl.denoised_sample_count > 0;
+      const rt::Vec3* layer = denoised ? impl.denoising->output.data()
+                              : impl.display_layer == DisplayLayer::Albedo ? impl.albedo.data()
                               : impl.display_layer == DisplayLayer::Normal
                                  ? impl.normal.data()
                                  : impl.accumulation.data();
       encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
          layer,
          impl.display_layer,
-         1.0f / static_cast<float>(impl.sample_count),
+         denoised ? 1.0f : 1.0f / static_cast<float>(impl.sample_count),
          mapping.pixels(),
          pixel_count
       );

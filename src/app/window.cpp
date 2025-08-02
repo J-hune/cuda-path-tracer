@@ -6,8 +6,10 @@
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
-#include <cstddef>
 #include <expected>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
 #include <string>
 #include <utility>
 
@@ -24,7 +26,8 @@ std::expected<Window, std::string> Window::create(int width, int height, const s
       return std::unexpected("Failed to create the window");
    }
    glfwMakeContextCurrent(window);
-   glfwSwapInterval(1);
+   // Sans synchronisation verticale : le GPU accumule des échantillons sans attendre l'écran
+   glfwSwapInterval(0);
    return Window(window, width, height);
 }
 
@@ -60,20 +63,9 @@ int glfw_key(Key key) {
       case Key::Down:
          return GLFW_KEY_LEFT_CONTROL;
       case Key::Fast:
-         return GLFW_KEY_LEFT_SHIFT;
-      case Key::Export:
-         return GLFW_KEY_P;
-      case Key::ToggleMis:
-         return GLFW_KEY_M;
-      case Key::ToggleFireflyClamp:
-         return GLFW_KEY_F;
-      case Key::CycleLayer:
-         return GLFW_KEY_V;
-      case Key::Quit:
-      case Key::Count:
          break;
    }
-   return GLFW_KEY_ESCAPE;
+   return GLFW_KEY_LEFT_SHIFT;
 }
 
 } // namespace
@@ -94,6 +86,15 @@ Window::Window(GLFWwindow* window, int width, int height):
    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture_, 0);
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+   // ImGui reçoit les événements clavier et souris de GLFW, file d'attente comprise : aucun appui
+   // n'est perdu, même avec peu d'images par seconde
+   IMGUI_CHECKVERSION();
+   ImGui::CreateContext();
+   ImGui::GetIO().IniFilename = nullptr;
+   ImGui::StyleColorsDark();
+   ImGui_ImplGlfw_InitForOpenGL(window_, true);
+   ImGui_ImplOpenGL3_Init("#version 330");
 }
 
 Window::Window(Window&& other) noexcept:
@@ -102,13 +103,15 @@ Window::Window(Window&& other) noexcept:
    framebuffer_(std::exchange(other.framebuffer_, 0)),
    pixel_buffer_(std::exchange(other.pixel_buffer_, 0)),
    width_(other.width_),
-   height_(other.height_),
-   was_down_(other.was_down_) {}
+   height_(other.height_) {}
 
 Window::~Window() {
    if (window_ == nullptr) {
       return;
    }
+   ImGui_ImplOpenGL3_Shutdown();
+   ImGui_ImplGlfw_Shutdown();
+   ImGui::DestroyContext();
    glDeleteBuffers(1, &pixel_buffer_);
    glDeleteFramebuffers(1, &framebuffer_);
    glDeleteTextures(1, &texture_);
@@ -140,8 +143,10 @@ void Window::resize_image(Size size) {
    allocate_image(texture_, pixel_buffer_, width_, height_);
 }
 
-void Window::set_title(const std::string& title) {
-   glfwSetWindowTitle(window_, title.c_str());
+void Window::begin_frame() {
+   ImGui_ImplOpenGL3_NewFrame();
+   ImGui_ImplGlfw_NewFrame();
+   ImGui::NewFrame();
 }
 
 void Window::present() {
@@ -171,6 +176,9 @@ void Window::present() {
       GL_NEAREST
    );
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+   ImGui::Render();
+   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
    glfwSwapBuffers(window_);
 }
 
@@ -178,16 +186,10 @@ bool Window::is_down(Key key) const {
    return glfwGetKey(window_, glfw_key(key)) == GLFW_PRESS;
 }
 
-bool Window::was_pressed(Key key) {
-   const bool down = is_down(key);
-   bool& was_down = was_down_[static_cast<std::size_t>(key)];
-   const bool pressed = down && !was_down;
-   was_down = down;
-   return pressed;
-}
-
 bool Window::is_looking() const {
-   return glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+   // Un clic commencé sur l'interface ne fait pas tourner la caméra
+   return glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS &&
+          !ImGui::GetIO().WantCaptureMouse;
 }
 
 CursorPosition Window::cursor_position() const {
