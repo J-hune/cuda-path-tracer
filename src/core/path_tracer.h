@@ -265,6 +265,55 @@ RT_HOST_DEVICE inline Vec3 surface_albedo(
    return material.albedo * sample_texture(texture, view.texels, interpolate_uv(view, hit));
 }
 
+// Réflexion ou réfraction sur une surface diélectrique lisse. Met à jour throughput (absorption
+// du volume traversé, couleur transmise) et renvoie le rayon suivant.
+RT_HOST_DEVICE inline Ray scatter_glass(
+   SceneView view,
+   const Hit& hit,
+   const Material& material,
+   Vec3 albedo,
+   const Ray& ray,
+   Pcg32& rng,
+   Vec3& throughput
+) {
+   const Vec3 outward = geometric_normal(view, hit.triangle);
+   if (dot(ray.direction, outward) > 0.0f) {
+      // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
+      throughput = throughput * beer_lambert(material.absorption, hit.t);
+   }
+   const Vec3 outward_shading = shading_normal(view, hit, outward);
+   const DielectricSample
+      sample = sample_dielectric(ray.direction, outward_shading, material.ior, rng);
+   if (sample.transmitted) {
+      throughput = throughput * albedo;
+   }
+   const Vec3 side = dot(sample.direction, outward) > 0.0f ? outward : -outward;
+   return {ray.at(hit.t) + (side * kRayOffset), sample.direction};
+}
+
+// Point d'une surface opaque touché par le rayon, avec ses normales et ses paramètres de BSDF
+RT_HOST_DEVICE inline ShadingPoint make_shading_point(
+   SceneView view,
+   const Hit& hit,
+   const Material& material,
+   Vec3 albedo,
+   const Ray& ray
+) {
+   const Vec3 n_g = facing_normal(view, hit.triangle, ray.direction);
+   // Normale d'ombrage, sauf si l'observateur se retrouve derrière elle
+   const Vec3 n_s = shading_normal(view, hit, n_g);
+   const Vec3 n = dot(n_s, -ray.direction) > 0.0f ? n_s : n_g;
+   const Frame frame = make_frame(n);
+   return {
+      .position = ray.at(hit.t),
+      .geometric_normal = n_g,
+      .frame = frame,
+      .wo = frame.to_local(-ray.direction),
+      .params =
+         {.base_color = albedo, .metallic = material.metallic, .roughness = material.roughness},
+   };
+}
+
 inline constexpr float kDefaultFireflyClamp = 10.0f;
 
 // Écrêtage des fireflies (biaisé), 0 : désactivé
@@ -323,7 +372,6 @@ RT_HOST_DEVICE inline Vec3 trace_path(
             radiance += clamp_contribution(emitted, max_contribution);
          }
       }
-      const Vec3 point = ray.at(hit.t);
       const Vec3 albedo = surface_albedo(view, material, hit);
       if (bounce == 0 && first_hit != nullptr) {
          const Vec3 facing = facing_normal(view, hit.triangle, ray.direction);
@@ -332,38 +380,13 @@ RT_HOST_DEVICE inline Vec3 trace_path(
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
          // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
-         const Vec3 outward = geometric_normal(view, hit.triangle);
-         if (dot(ray.direction, outward) > 0.0f) {
-            // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
-            throughput = throughput * beer_lambert(material.absorption, hit.t);
-         }
-         const Vec3 outward_shading = shading_normal(view, hit, outward);
-         const DielectricSample
-            sample = sample_dielectric(ray.direction, outward_shading, material.ior, rng);
-         if (sample.transmitted) {
-            throughput = throughput * albedo;
-         }
-         const Vec3 side = dot(sample.direction, outward) > 0.0f ? outward : -outward;
-         ray = {point + (side * kRayOffset), sample.direction};
+         ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput);
          specular_bounce = true;
       } else {
          // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
-         const Vec3 n_g = facing_normal(view, hit.triangle, ray.direction);
-         // Normale d'ombrage, sauf si l'observateur se retrouve derrière elle
-         const Vec3 n_s = shading_normal(view, hit, n_g);
-         const Vec3 n = dot(n_s, -ray.direction) > 0.0f ? n_s : n_g;
-         const Frame frame = make_frame(n);
-         const ShadingPoint shading{
-            .position = point,
-            .geometric_normal = n_g,
-            .frame = frame,
-            .wo = frame.to_local(-ray.direction),
-            .params = {
-               .base_color = albedo,
-               .metallic = material.metallic,
-               .roughness = material.roughness
-            },
-         };
+         const ShadingPoint shading = make_shading_point(view, hit, material, albedo, ray);
+         const Vec3 n_g = shading.geometric_normal;
+         const Vec3 n = shading.frame.normal;
          const Vec3 direct = throughput * direct_light(view, shading, rng, ray_count);
          radiance += clamp_contribution(direct, max_contribution);
 
@@ -372,12 +395,12 @@ RT_HOST_DEVICE inline Vec3 trace_path(
             shading.wo,
             {rng.next_float(), rng.next_float()}
          );
-         const Vec3 wi = frame.to_world(bsdf.wi);
+         const Vec3 wi = shading.frame.to_world(bsdf.wi);
          // Une direction sous la surface réelle ne peut pas repartir de ce côté
          if (bsdf.pdf <= 0.0f || dot(wi, n_g) <= 0.0f) {
             return radiance;
          }
-         ray = {point + (n_g * kRayOffset), wi};
+         ray = {shading.position + (n_g * kRayOffset), wi};
          throughput = throughput * bsdf.weight * shadow_terminator(n_g, n, wi);
          bsdf_pdf = bsdf.pdf;
          specular_bounce = false;

@@ -12,6 +12,7 @@ include(Catch)
 add_executable(rt_tests
    core/test_lights.cpp
    core/test_mis.cpp
+   core/test_photon.cpp
    core/test_rng.cpp
    core/test_vec3.cpp
    core/test_ray.cpp
