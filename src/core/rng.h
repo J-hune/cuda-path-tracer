@@ -16,6 +16,15 @@ public:
       return {seed, pixel_index};
    }
 
+   // Photon photon_index de la passe pass, sur des flux distincts de ceux des pixels
+   RT_HOST_DEVICE static constexpr Pcg32 make_photon_rng(
+      std::uint32_t photon_index,
+      std::uint32_t pass
+   ) {
+      const std::uint64_t seed = mix64((std::uint64_t{photon_index} << 32u) | pass);
+      return {seed, (std::uint64_t{1} << 32u) | photon_index};
+   }
+
    RT_HOST_DEVICE constexpr Pcg32(std::uint64_t seed, std::uint64_t stream):
       inc_((stream << 1u) | 1u) {
       step();
