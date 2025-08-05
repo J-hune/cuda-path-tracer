@@ -1,13 +1,21 @@
 #pragma once
 
 #include "core/host_device.h"
-#include "core/photon_tracer.h"
 #include "core/vec3.h"
 
 #include <cmath>
 #include <cstdint>
 
 namespace rt {
+
+// Photon de caustique : lumière arrivée sur une surface diffuse après au moins un rebond sur du
+// verre ou du métal poli
+struct Photon {
+   Vec3 position;
+   Vec3 power;     // flux transporté, en W
+   Vec3 direction; // direction d'où vient la lumière
+   Vec3 normal;    // normale géométrique, du côté d'arrivée
+};
 
 // Coordonnées entières d'une cellule de la grille
 struct Cell {

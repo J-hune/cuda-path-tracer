@@ -7,6 +7,7 @@
 #include "core/light.h"
 #include "core/material.h"
 #include "core/path_tracer.h"
+#include "core/photon_map.h"
 #include "core/ray.h"
 #include "core/rng.h"
 #include "core/sampling.h"
@@ -18,23 +19,6 @@
 #include <cstdint>
 
 namespace rt {
-
-// Photon de caustique : lumière arrivée sur une surface diffuse après au moins un rebond sur du
-// verre ou du métal poli
-struct Photon {
-   Vec3 position;
-   Vec3 power;     // flux transporté, en W
-   Vec3 direction; // direction d'où vient la lumière
-   Vec3 normal;    // normale géométrique, du côté d'arrivée
-};
-
-// Rugosité en dessous de laquelle un métal est traité comme un miroir par les photons
-inline constexpr float kGlossyRoughness = 0.25f;
-
-// Métal poli : les photons y rebondissent sans y être stockés
-RT_HOST_DEVICE inline bool is_glossy_metal(const Material& material) {
-   return material.metallic >= 0.99f && material.roughness < kGlossyRoughness;
-}
 
 struct PhotonRay {
    Ray ray;

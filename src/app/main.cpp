@@ -52,6 +52,19 @@ struct Controls {
    std::string status; // résultat du dernier export
 };
 
+std::string caustic_description(const Renderer& renderer) {
+   if (!renderer.caustics()) {
+      return "path tracing seul";
+   }
+   const Renderer::CausticSettings settings = renderer.caustic_settings();
+   return std::format(
+      "photons progressifs : {} par passe, rayon initial {:.4g}, alpha {:.3g}",
+      settings.photons_per_pass,
+      settings.initial_radius,
+      settings.alpha
+   );
+}
+
 // PNG tone mappé, EXR linéaire et manifeste sous le même nom, plus l'image débruitée si le
 // débruitage est actif. Renvoie le message à afficher.
 std::string export_render(
@@ -73,6 +86,7 @@ std::string export_render(
       .rays = accumulated.rays,
       .mis = renderer.mis(),
       .firefly_clamp = renderer.firefly_clamp(),
+      .caustics = caustic_description(renderer),
       .denoiser = renderer.denoiser() ? "OptiX (albédo et normales)" : "aucun",
       .max_bounces = rt::kMaxBounces,
       .russian_roulette_start = rt::kRouletteStart,
@@ -125,6 +139,10 @@ void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
                    ImGuiSliderFlags_Logarithmic
                 )) {
       renderer.set_firefly_clamp(controls.firefly_threshold);
+   }
+   bool caustics = renderer.caustics();
+   if (ImGui::Checkbox("Caustiques (photons)", &caustics)) {
+      renderer.set_caustics(caustics);
    }
    bool denoise = renderer.denoiser();
    if (ImGui::Checkbox("Denoiser OptiX", &denoise)) {

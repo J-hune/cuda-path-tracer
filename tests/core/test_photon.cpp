@@ -1,9 +1,14 @@
+#include "core/bsdf.h"
 #include "core/light.h"
+#include "core/path_tracer.h"
+#include "core/photon_map.h"
 #include "core/photon_tracer.h"
+#include "core/ray.h"
 #include "core/rng.h"
 #include "core/scene_view.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
+#include "cpu_photon_map.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
 
@@ -21,6 +26,8 @@ namespace {
 constexpr std::uint32_t kFloorMaterial = 0;
 constexpr std::uint32_t kGlassMaterial = 1;
 constexpr std::uint32_t kMirrorMaterial = 2;
+constexpr std::uint32_t kLightMaterial = 3;
+constexpr rt::SurfaceParams kFloor{.base_color = {0.8f, 0.8f, 0.8f}};
 
 struct TestScene {
    rt::Scene scene;
@@ -34,6 +41,8 @@ struct TestScene {
       view.indices = scene.indices.data();
       view.materials = scene.materials.data();
       view.material_indices = scene.material_indices.data();
+      view.emissive_triangles = scene.emissive_triangles.data();
+      view.emissive_triangle_count = static_cast<std::uint32_t>(scene.emissive_triangles.size());
       view.punctual_lights = scene.punctual_lights.data();
       view.punctual_light_count = static_cast<std::uint32_t>(scene.punctual_lights.size());
       view.uvs = scene.uvs.data();
@@ -69,6 +78,7 @@ TestScene make_scene(const rt::PunctualLight& light, bool glass, bool mirror) {
        .transmission = 1.0f,
        .ior = 1.0f},
       {.albedo = {1, 1, 1}, .emission = {0, 0, 0}, .metallic = 1.0f, .roughness = 0.0f},
+      {.albedo = {0, 0, 0}, .emission = {5, 5, 5}},
    };
    add_quad(s, 10.0f, 0.0f, true, kFloorMaterial);
    if (glass) {
@@ -81,6 +91,32 @@ TestScene make_scene(const rt::PunctualLight& light, bool glass, bool mirror) {
    s.punctual_lights = {light};
    t.bvh = rt::build_bvh(s);
    return t;
+}
+
+// Sol mat, lame de verre d'indice 1, et carré émissif au-dessus de la lame
+TestScene make_area_light_scene() {
+   TestScene t;
+   rt::Scene& s = t.scene;
+   s.materials = make_scene({}, false, false).scene.materials;
+   add_quad(s, 10.0f, 0.0f, true, kFloorMaterial);
+   add_quad(s, 2.0f, 1.1f, true, kGlassMaterial);
+   add_quad(s, 2.0f, 1.0f, false, kGlassMaterial);
+   add_quad(s, 0.5f, 2.0f, false, kLightMaterial);
+   s.emissive_triangles = {6, 7};
+   t.bvh = rt::build_bvh(s);
+   return t;
+}
+
+// Moyenne de trace_path pour un rayon vertical qui touche le sol en (0, 0, 0), sous la lame
+rt::Vec3 floor_radiance(const rt::SceneView& view, int samples) {
+   const rt::Ray ray{{0.0f, 0.0f, 0.5f}, {0.0f, 0.0f, -1.0f}};
+   rt::Vec3 sum{0.0f, 0.0f, 0.0f};
+   std::uint32_t ray_count = 0;
+   for (int i = 0; i < samples; ++i) {
+      rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(0, static_cast<std::uint32_t>(i));
+      sum += rt::trace_path(ray, view, rng, ray_count);
+   }
+   return sum / static_cast<float>(samples);
 }
 
 // Spot étroit dirigé selon direction, pleine intensité au centre du cône
@@ -171,4 +207,35 @@ TEST_CASE(
    int stored = 0;
    const float irradiance = irradiance_at_origin(t, 400'000, 0.1f, stored);
    CHECK_THAT(irradiance, WithinRel(100.0f / 9.0f, 0.03f));
+}
+
+TEST_CASE("caustiques : sous la lame, les photons apportent la lumière du spot", "[photon]") {
+   // Le path tracer seul ne voit rien : l'ombre portée par le verre bloque l'éclairage direct
+   const TestScene t = make_scene(spot({0, 0, 2}, {0, 0, -1}), true, false);
+   CHECK(floor_radiance(t.view(), 16).x == 0.0f);
+
+   const rt::test::CpuPhotonMap map(rt::test::trace_photons(t.view(), 400'000, 9), 1u << 16, 0.1f);
+   rt::SceneView view = t.view();
+   view.caustics = map.view;
+   const float expected = rt::principled::eval(kFloor, {0, 0, 1}, {0, 0, 1}).x * (100.0f / 4.0f);
+   CHECK_THAT(floor_radiance(view, 16).x, WithinRel(expected, 0.03f));
+}
+
+TEST_CASE("caustiques : photons et path tracer ne comptent pas deux fois la lumière", "[photon]") {
+   // Lampe surfacique : le path tracer seul trouve aussi la caustique, en touchant la lampe à
+   // travers le verre. Avec les photons, ces chemins sont exclus : la moyenne reste la même.
+   const TestScene t = make_area_light_scene();
+   const rt::Vec3 path_traced = floor_radiance(t.view(), 400'000);
+
+   const rt::test::CpuPhotonMap map(
+      rt::test::trace_photons(t.view(), 4'000'000, 9),
+      1u << 16,
+      0.15f
+   );
+   rt::SceneView view = t.view();
+   view.caustics = map.view;
+   const rt::Vec3 with_photons = floor_radiance(view, 64);
+
+   CHECK(path_traced.x > 0.0f);
+   CHECK_THAT(with_photons.x, WithinRel(path_traced.x, 0.03f));
 }

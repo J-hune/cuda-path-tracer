@@ -72,6 +72,7 @@ rt::SceneView make_view(const rt::Scene& scene, const rt::Bvh& bvh) {
       .emissive_triangles = nullptr,
       .emissive_triangle_count = 0,
       .environment = scene.environment,
+      .caustics = {},
    };
 }
 

@@ -6,6 +6,7 @@
 #include "core/host_device.h"
 #include "core/light.h"
 #include "core/material.h"
+#include "core/photon_map.h"
 #include "core/ray.h"
 #include "core/texture.h"
 #include "core/triangle.h"
@@ -37,6 +38,8 @@ struct SceneView {
    bool use_mis = true;
    // Écrêtage des fireflies, 0 : désactivé
    float firefly_clamp = 0.0f;
+   // Photons de caustique, vide : caustiques laissées au path tracer seul
+   PhotonMapView caustics;
 };
 
 struct Hit {

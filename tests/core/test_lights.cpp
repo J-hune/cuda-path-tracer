@@ -49,6 +49,7 @@ struct TestScene {
          .punctual_light_count = static_cast<std::uint32_t>(scene.punctual_lights.size()),
          .uvs = scene.uvs.data(),
          .environment = scene.environment,
+         .caustics = {},
       };
    }
 };

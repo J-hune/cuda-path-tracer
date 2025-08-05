@@ -20,6 +20,7 @@ struct RenderManifest {
 
    bool mis = true;
    float firefly_clamp = 0.0f; // 0 : désactivé
+   std::string caustics;
    std::string denoiser;
    int max_bounces = 0;
    int russian_roulette_start = 0;

@@ -6,6 +6,7 @@
 #include "core/host_device.h"
 #include "core/light.h"
 #include "core/material.h"
+#include "core/photon_map.h"
 #include "core/ray.h"
 #include "core/rng.h"
 #include "core/sampling.h"
@@ -314,6 +315,28 @@ RT_HOST_DEVICE inline ShadingPoint make_shading_point(
    };
 }
 
+// Rugosité en dessous de laquelle un métal est traité comme un miroir par les photons
+inline constexpr float kGlossyRoughness = 0.25f;
+
+// Métal poli : les photons y rebondissent sans y être stockés
+RT_HOST_DEVICE inline bool is_glossy_metal(const Material& material) {
+   return material.metallic >= 0.99f && material.roughness < kGlossyRoughness;
+}
+
+// Éclairement des caustiques au point, estimé par la densité des photons proches
+RT_HOST_DEVICE inline Vec3 gather_caustics(const PhotonMapView& map, const ShadingPoint& shading) {
+   Vec3 sum{0.0f, 0.0f, 0.0f};
+   for_each_photon_near(map, shading.position, [&](const Photon& photon) {
+      // Photons d'une autre surface (de l'autre côté d'une paroi fine, d'un coin)
+      if (dot(photon.normal, shading.geometric_normal) < 0.9f) {
+         return;
+      }
+      const Vec3 wi = shading.frame.to_local(photon.direction);
+      sum += principled::eval(shading.params, shading.wo, wi) * photon.power;
+   });
+   return sum / (kPi * map.radius * map.radius);
+}
+
 inline constexpr float kDefaultFireflyClamp = 10.0f;
 
 // Écrêtage des fireflies (biaisé), 0 : désactivé
@@ -346,6 +369,12 @@ RT_HOST_DEVICE inline Vec3 trace_path(
    // entièrement. Après un rebond de la BSDF, elle est pondérée par MIS face à l'éclairage direct.
    bool specular_bounce = false;
    float bsdf_pdf = 0.0f;
+   // Avec les photons : le chemin est passé par une surface diffuse, puis seulement par du verre ou
+   // du métal poli. La lumière qu'il trouve alors est une caustique, déjà apportée à cette surface
+   // par les photons.
+   const bool photons = view.caustics.bucket_count > 0;
+   bool after_diffuse = false;
+   bool caustic_path = false;
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       // Seul l'éclairage indirect est écrêté
@@ -362,7 +391,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(
       }
 
       const Material material = view.materials[view.material_indices[hit.triangle]];
-      if (max_component(material.emission) > 0.0f) {
+      if (max_component(material.emission) > 0.0f && !caustic_path) {
          if (bounce == 0 || specular_bounce) {
             radiance += clamp_contribution(throughput * material.emission, max_contribution);
          } else if (view.use_mis) {
@@ -382,13 +411,22 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
          ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput);
          specular_bounce = true;
+         caustic_path = after_diffuse;
       } else {
          // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
          const ShadingPoint shading = make_shading_point(view, hit, material, albedo, ray);
          const Vec3 n_g = shading.geometric_normal;
          const Vec3 n = shading.frame.normal;
-         const Vec3 direct = throughput * direct_light(view, shading, rng, ray_count);
-         radiance += clamp_contribution(direct, max_contribution);
+         const bool glossy = photons && is_glossy_metal(material);
+         if (!(glossy && after_diffuse)) {
+            const Vec3 direct = throughput * direct_light(view, shading, rng, ray_count);
+            radiance += clamp_contribution(direct, max_contribution);
+         }
+         if (photons && !glossy) {
+            radiance += throughput * gather_caustics(view.caustics, shading);
+            after_diffuse = true;
+         }
+         caustic_path = glossy && after_diffuse;
 
          const BsdfSample bsdf = principled::sample(
             shading.params,

@@ -16,6 +16,7 @@
 #include "gpu/device_buffer.h"
 #include "gpu/gl_pixel_buffer.h"
 #include "gpu/gpu_timer.h"
+#include "gpu/photon_map.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
@@ -34,6 +35,10 @@
 namespace {
 
 // Ajoute un échantillon par pixel (l'échantillon numéro sample_index) au tampon d'accumulation
+constexpr std::uint32_t kPhotonsPerPass = 1u << 18;
+constexpr float kInitialRadiusFraction = 0.002f; // de la diagonale de la scène
+constexpr float kRadiusAlpha = 2.0f / 3.0f;
+
 // Tampons d'accumulation : somme des échantillons de chaque pixel, pour chaque couche
 struct Accumulation {
    rt::Vec3* color;
@@ -159,7 +164,12 @@ struct Renderer::Impl {
       accumulation(static_cast<std::size_t>(width) * height),
       albedo(static_cast<std::size_t>(width) * height),
       normal(static_cast<std::size_t>(width) * height),
-      environment(scene.environment) {
+      environment(scene.environment),
+      initial_photon_radius(
+         bvh.nodes.empty()
+            ? 0.0f
+            : kInitialRadiusFraction * rt::length(bvh.nodes[0].bounds.max - bvh.nodes[0].bounds.min)
+      ) {
       nodes.upload(bvh.nodes);
       triangle_indices.upload(bvh.triangle_indices);
       positions.upload(scene.positions);
@@ -193,6 +203,7 @@ struct Renderer::Impl {
          .environment = environment,
          .use_mis = use_mis,
          .firefly_clamp = firefly_clamp,
+         .caustics = {},
       };
    }
 
@@ -239,6 +250,13 @@ struct Renderer::Impl {
       DeviceBuffer<rt::Vec3> normal;
       DeviceBuffer<rt::Vec3> output;
    };
+   // Caustiques par photons, carte reconstruite à chaque échantillon avec un rayon qui diminue
+   // (Knaus et Zwicker, « Progressive Photon Mapping: A Probabilistic Approach », 2011)
+   bool caustics = true;
+   float initial_photon_radius;
+   float photon_radius2 = 0.0f;
+   std::optional<PhotonMap> photon_map;
+
    bool denoise = false;
    std::optional<Denoising> denoising;
    std::uint32_t denoised_sample_count = 0; // 0 : pas d'image débruitée depuis le reset
@@ -331,6 +349,23 @@ void Renderer::reset() {
    impl_->denoised_sample_count = 0;
 }
 
+void Renderer::set_caustics(bool enabled) {
+   impl_->caustics = enabled;
+   reset();
+}
+
+bool Renderer::caustics() const {
+   return impl_->caustics;
+}
+
+Renderer::CausticSettings Renderer::caustic_settings() const {
+   return {
+      .photons_per_pass = kPhotonsPerPass,
+      .initial_radius = impl_->initial_photon_radius,
+      .alpha = kRadiusAlpha,
+   };
+}
+
 void Renderer::set_denoiser(bool enabled) {
    impl_->denoise = enabled;
    impl_->denoised_sample_count = 0;
@@ -398,10 +433,25 @@ void Renderer::render(const rt::Camera& camera) {
    const dim3 block(16, 16);
    const dim3 grid((impl.width + 15) / 16, (impl.height + 15) / 16);
    RT_CUDA_CHECK(cudaMemset(impl.ray_counter.data(), 0, sizeof(unsigned long long)));
+   rt::SceneView view = impl.view();
+   if (impl.caustics) {
+      if (impl.sample_count == 0) {
+         impl.photon_radius2 = impl.initial_photon_radius * impl.initial_photon_radius;
+      } else {
+         const auto pass = static_cast<float>(impl.sample_count);
+         impl.photon_radius2 *= (pass + kRadiusAlpha) / (pass + 1.0f);
+      }
+      if (!impl.photon_map) {
+         impl.photon_map.emplace(kPhotonsPerPass);
+      }
+      impl.photon_map->build(view, impl.sample_count, std::sqrt(impl.photon_radius2));
+      view.caustics = impl.photon_map->view();
+   }
+
    impl.timer.start();
    accumulate_kernel<<<grid, block>>>(
       camera,
-      impl.view(),
+      view,
       impl.sums(),
       impl.sample_count,
       impl.ray_counter.data(),

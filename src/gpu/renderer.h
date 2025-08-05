@@ -40,6 +40,13 @@ public:
       int runtime_version = 0; // version du runtime CUDA du programme, même format
    };
 
+   // Paramètres des caustiques par photons
+   struct CausticSettings {
+      std::uint32_t photons_per_pass = 0;
+      float initial_radius = 0.0f;
+      float alpha = 0.0f; // vitesse de diminution du rayon
+   };
+
    Renderer(const rt::Scene& scene, const rt::Bvh& bvh, int width, int height);
    ~Renderer();
    Renderer(const Renderer&) = delete;
@@ -72,6 +79,11 @@ public:
    // Écrêtage des fireflies (biaisé), 0 : désactivé. Repart de zéro
    void set_firefly_clamp(float max_contribution);
    [[nodiscard]] float firefly_clamp() const;
+
+   // Caustiques par photons, puis repart de zéro
+   void set_caustics(bool enabled);
+   [[nodiscard]] bool caustics() const;
+   [[nodiscard]] CausticSettings caustic_settings() const;
 
    // Débruiteur OptiX sur la couche couleur affichée, relancé à intervalles croissants
    void set_denoiser(bool enabled);
