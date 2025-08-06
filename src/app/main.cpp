@@ -52,6 +52,18 @@ struct Controls {
    std::string status; // résultat du dernier export
 };
 
+std::string tone_mapping_name(rt::ToneMapping tone_mapping) {
+   switch (tone_mapping) {
+      case rt::ToneMapping::Agx:
+         return "AgX (approximation de Benjamin Wrensch) puis sRGB";
+      case rt::ToneMapping::Aces:
+         return "ACES (approximation de Stephen Hill) puis sRGB";
+      case rt::ToneMapping::Standard:
+         break;
+   }
+   return "Standard (borné à [0, 1]) puis sRGB";
+}
+
 std::string caustic_description(const Renderer& renderer) {
    if (!renderer.caustics()) {
       return "path tracing seul";
@@ -91,16 +103,23 @@ std::string export_render(
       .max_bounces = rt::kMaxBounces,
       .russian_roulette_start = rt::kRouletteStart,
       .bvh = "SAH (binning)",
-      .tone_mapping = "ACES (approximation de Stephen Hill) puis sRGB",
-      .exposure = rt::kDefaultExposure,
+      .tone_mapping = tone_mapping_name(renderer.display().tone_mapping),
+      .exposure = renderer.display().exposure,
    };
    const std::vector<rt::Vec3> image = renderer.image();
-   bool ok = write_png(base + ".png", image, size.width, size.height) &&
+   bool ok = write_png(base + ".png", image, size.width, size.height, renderer.display()) &&
              write_exr(base + ".exr", image, size.width, size.height) &&
              write_manifest(base + ".json", manifest);
    if (renderer.denoiser()) {
       const std::vector<rt::Vec3> denoised = renderer.denoised_image();
-      ok = ok && write_png(base + "_debruite.png", denoised, size.width, size.height) &&
+      ok = ok &&
+           write_png(
+              base + "_debruite.png",
+              denoised,
+              size.width,
+              size.height,
+              renderer.display()
+           ) &&
            write_exr(base + "_debruite.exr", denoised, size.width, size.height);
    }
    return ok ? std::format("Exporté : {}", base) : std::format("Échec de l'export de {}", base);
@@ -151,6 +170,22 @@ void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
    int layer = static_cast<int>(renderer.display_layer());
    if (ImGui::Combo("AOV", &layer, "Beauty\0Albedo\0Normal\0")) {
       renderer.set_display_layer(static_cast<Renderer::DisplayLayer>(layer));
+   }
+
+   ImGui::SeparatorText("Affichage");
+   rt::DisplaySettings display = renderer.display();
+   int tone_mapping = static_cast<int>(display.tone_mapping);
+   bool display_changed = ImGui::Combo("Tone mapping", &tone_mapping, "AgX\0ACES\0Standard\0");
+   display_changed |= ImGui::SliderFloat(
+      "Exposition (EV)",
+      &display.exposure,
+      -10.0f,
+      10.0f,
+      "%.1f"
+   );
+   if (display_changed) {
+      display.tone_mapping = static_cast<rt::ToneMapping>(tone_mapping);
+      renderer.set_display(display);
    }
 
    ImGui::SeparatorText("Export");

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/camera.h"
+#include "core/tonemap.h"
 #include "core/vec3.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
@@ -72,6 +73,10 @@ public:
    // zéro
    void set_mis(bool enabled);
    [[nodiscard]] bool mis() const;
+
+   // Exposition et tone mapping de l'image affichée, sans effet sur l'accumulation
+   void set_display(rt::DisplaySettings display);
+   [[nodiscard]] rt::DisplaySettings display() const;
 
    void set_display_layer(DisplayLayer layer);
    [[nodiscard]] DisplayLayer display_layer() const;

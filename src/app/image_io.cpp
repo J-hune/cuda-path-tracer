@@ -60,11 +60,14 @@ std::uint16_t to_half_bits(float value) {
 
 } // namespace
 
-std::vector<std::uint8_t> to_rgba8(const std::vector<rt::Vec3>& image) {
+std::vector<std::uint8_t> to_rgba8(
+   const std::vector<rt::Vec3>& image,
+   rt::DisplaySettings display
+) {
    std::vector<std::uint8_t> pixels;
    pixels.reserve(image.size() * 4);
    for (const rt::Vec3& pixel : image) {
-      const rt::Vec3 c = rt::display_color(pixel, rt::kDefaultExposure);
+      const rt::Vec3 c = rt::display_color(pixel, display);
       pixels.push_back(to_byte(c.x));
       pixels.push_back(to_byte(c.y));
       pixels.push_back(to_byte(c.z));
@@ -73,8 +76,14 @@ std::vector<std::uint8_t> to_rgba8(const std::vector<rt::Vec3>& image) {
    return pixels;
 }
 
-bool write_png(const std::string& path, const std::vector<rt::Vec3>& image, int width, int height) {
-   const std::vector<std::uint8_t> pixels = to_rgba8(image);
+bool write_png(
+   const std::string& path,
+   const std::vector<rt::Vec3>& image,
+   int width,
+   int height,
+   rt::DisplaySettings display
+) {
+   const std::vector<std::uint8_t> pixels = to_rgba8(image, display);
    return stbi_write_png(path.c_str(), width, height, 4, pixels.data(), width * 4) != 0;
 }
 

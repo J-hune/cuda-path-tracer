@@ -97,7 +97,7 @@ bool write_manifest(const std::string& path, const RenderManifest& m) {
    file << std::format("    \"russian_roulette_start\": {},\n", m.russian_roulette_start);
    file << std::format("    \"bvh\": {},\n", json_string(m.bvh));
    file << std::format("    \"tone_mapping\": {},\n", json_string(m.tone_mapping));
-   file << std::format("    \"exposure\": {}\n", m.exposure);
+   file << std::format("    \"exposure_ev\": {}\n", m.exposure);
    file << "  }\n";
    file << "}\n";
    return file.good();

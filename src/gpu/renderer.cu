@@ -115,6 +115,7 @@ __device__ unsigned char to_byte(float c) {
 __global__ void encode_kernel(
    const rt::Vec3* layer,
    Renderer::DisplayLayer kind,
+   rt::DisplaySettings display,
    float inverse_sample_count,
    uchar4* pixels,
    int pixel_count
@@ -127,7 +128,7 @@ __global__ void encode_kernel(
    rt::Vec3 c{0.0f, 0.0f, 0.0f};
    switch (kind) {
       case Renderer::DisplayLayer::Color:
-         c = rt::display_color(value, rt::kDefaultExposure);
+         c = rt::display_color(value, display);
          break;
       case Renderer::DisplayLayer::Albedo:
          c = {
@@ -225,6 +226,7 @@ struct Renderer::Impl {
    DeviceBuffer<rt::Vec3> albedo;
    DeviceBuffer<rt::Vec3> normal;
    DisplayLayer display_layer = DisplayLayer::Color;
+   rt::DisplaySettings display;
    std::uint32_t sample_count = 0;
    DeviceBuffer<unsigned long long> ray_counter{1};
    GpuTimer timer;
@@ -333,6 +335,14 @@ void Renderer::set_firefly_clamp(float max_contribution) {
 
 float Renderer::firefly_clamp() const {
    return impl_->firefly_clamp;
+}
+
+void Renderer::set_display(rt::DisplaySettings display) {
+   impl_->display = display;
+}
+
+rt::DisplaySettings Renderer::display() const {
+   return impl_->display;
 }
 
 void Renderer::set_display_layer(DisplayLayer layer) {
@@ -488,6 +498,7 @@ void Renderer::render(const rt::Camera& camera) {
       encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
          layer,
          impl.display_layer,
+         impl.display,
          denoised ? 1.0f : 1.0f / static_cast<float>(impl.sample_count),
          mapping.pixels(),
          pixel_count

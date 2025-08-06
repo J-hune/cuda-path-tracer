@@ -26,7 +26,7 @@ struct RenderManifest {
    int russian_roulette_start = 0;
    std::string bvh;
    std::string tone_mapping;
-   float exposure = 1.0f;
+   float exposure = 0.0f; // en IL
 };
 
 // Heure locale actuelle au format ISO 8601, avec le décalage horaire (2025-07-14T18:03:12+0200)
