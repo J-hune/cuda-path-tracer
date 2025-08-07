@@ -40,6 +40,9 @@ struct SceneView {
    float firefly_clamp = 0.0f;
    // Photons de caustique, vide : caustiques laissées au path tracer seul
    PhotonMapView caustics;
+   // Sphères vers lesquelles les photons sont émis, aucune : dans toutes les directions
+   const PhotonTarget* photon_targets = nullptr;
+   std::uint32_t photon_target_count = 0;
 };
 
 struct Hit {

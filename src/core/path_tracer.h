@@ -323,10 +323,14 @@ RT_HOST_DEVICE inline bool is_glossy_metal(const Material& material) {
    return material.metallic >= 0.99f && material.roughness < kGlossyRoughness;
 }
 
-// Éclairement des caustiques au point, estimé par la densité des photons proches
-RT_HOST_DEVICE inline Vec3 gather_caustics(const PhotonMapView& map, const ShadingPoint& shading) {
+// Éclairement des caustiques au point, estimé par la densité des photons à moins de radius
+RT_HOST_DEVICE inline Vec3 gather_caustics(
+   const PhotonMapView& map,
+   const ShadingPoint& shading,
+   float radius
+) {
    Vec3 sum{0.0f, 0.0f, 0.0f};
-   for_each_photon_near(map, shading.position, [&](const Photon& photon) {
+   for_each_photon_near(map, shading.position, radius, [&](const Photon& photon) {
       // Photons d'une autre surface (de l'autre côté d'une paroi fine, d'un coin)
       if (dot(photon.normal, shading.geometric_normal) < 0.9f) {
          return;
@@ -334,7 +338,7 @@ RT_HOST_DEVICE inline Vec3 gather_caustics(const PhotonMapView& map, const Shadi
       const Vec3 wi = shading.frame.to_local(photon.direction);
       sum += principled::eval(shading.params, shading.wo, wi) * photon.power;
    });
-   return sum / (kPi * map.radius * map.radius);
+   return sum / (kPi * radius * radius);
 }
 
 inline constexpr float kDefaultFireflyClamp = 10.0f;
@@ -375,6 +379,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(
    const bool photons = view.caustics.bucket_count > 0;
    bool after_diffuse = false;
    bool caustic_path = false;
+   float distance = 0.0f; // parcourue depuis la caméra
 
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       // Seul l'éclairage indirect est écrêté
@@ -390,6 +395,7 @@ RT_HOST_DEVICE inline Vec3 trace_path(
          return radiance;
       }
 
+      distance += hit.t;
       const Material material = view.materials[view.material_indices[hit.triangle]];
       if (max_component(material.emission) > 0.0f && !caustic_path) {
          if (bounce == 0 || specular_bounce) {
@@ -423,7 +429,13 @@ RT_HOST_DEVICE inline Vec3 trace_path(
             radiance += clamp_contribution(direct, max_contribution);
          }
          if (photons && !glossy) {
-            radiance += throughput * gather_caustics(view.caustics, shading);
+            // Vu depuis la caméra (à travers du verre ou un miroir au plus), le rayon suit la
+            // taille d'un pixel ; après un rebond diffus, le flou ne se voit plus : rayon maximal
+            const PhotonMapView& map = view.caustics;
+            const float radius = after_diffuse || map.radius_per_distance <= 0.0f
+                                    ? map.radius
+                                    : std::fmin(map.radius, distance * map.radius_per_distance);
+            radiance += throughput * gather_caustics(map, shading, radius);
             after_diffuse = true;
          }
          caustic_path = glossy && after_diffuse;

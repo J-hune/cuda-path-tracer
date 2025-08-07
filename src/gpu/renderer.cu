@@ -4,6 +4,7 @@
 #include "core/light.h"
 #include "core/material.h"
 #include "core/path_tracer.h"
+#include "core/photon_map.h"
 #include "core/ray.h"
 #include "core/rng.h"
 #include "core/scene_view.h"
@@ -20,6 +21,7 @@
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
+#include "scene/photon_targets.h"
 
 #include <cuda_runtime.h>
 
@@ -35,8 +37,9 @@
 namespace {
 
 // Ajoute un échantillon par pixel (l'échantillon numéro sample_index) au tampon d'accumulation
-constexpr std::uint32_t kPhotonsPerPass = 1u << 18;
+constexpr std::uint32_t kPhotonsPerPass = 1u << 17;
 constexpr float kInitialRadiusFraction = 0.002f; // de la diagonale de la scène
+constexpr float kInitialRadiusPixels = 1.5f;     // caustiques vues depuis la caméra
 constexpr float kRadiusAlpha = 2.0f / 3.0f;
 
 // Tampons d'accumulation : somme des échantillons de chaque pixel, pour chaque couche
@@ -165,6 +168,7 @@ struct Renderer::Impl {
       accumulation(static_cast<std::size_t>(width) * height),
       albedo(static_cast<std::size_t>(width) * height),
       normal(static_cast<std::size_t>(width) * height),
+      photon_targets(rt::photon_targets(scene)),
       environment(scene.environment),
       initial_photon_radius(
          bvh.nodes.empty()
@@ -183,6 +187,8 @@ struct Renderer::Impl {
       normals.upload(scene.normals);
       textures.upload(scene.textures);
       texels.upload(scene.texels);
+      photon_target_buffer = DeviceBuffer<rt::PhotonTarget>(photon_targets.size());
+      photon_target_buffer.upload(photon_targets);
    }
 
    [[nodiscard]] rt::SceneView view() const {
@@ -205,6 +211,8 @@ struct Renderer::Impl {
          .use_mis = use_mis,
          .firefly_clamp = firefly_clamp,
          .caustics = {},
+         .photon_targets = photon_target_buffer.data(),
+         .photon_target_count = static_cast<std::uint32_t>(photon_targets.size()),
       };
    }
 
@@ -232,6 +240,8 @@ struct Renderer::Impl {
    GpuTimer timer;
    FrameStats last_frame;
    AccumulatedStats accumulated;
+   std::vector<rt::PhotonTarget> photon_targets;
+   DeviceBuffer<rt::PhotonTarget> photon_target_buffer{0};
    rt::Environment environment;
    bool use_mis = true;
    float firefly_clamp = 0.0f;
@@ -372,6 +382,7 @@ Renderer::CausticSettings Renderer::caustic_settings() const {
    return {
       .photons_per_pass = kPhotonsPerPass,
       .initial_radius = impl_->initial_photon_radius,
+      .initial_radius_pixels = kInitialRadiusPixels,
       .alpha = kRadiusAlpha,
    };
 }
@@ -456,6 +467,8 @@ void Renderer::render(const rt::Camera& camera) {
       }
       impl.photon_map->build(view, impl.sample_count, std::sqrt(impl.photon_radius2));
       view.caustics = impl.photon_map->view();
+      const float shrink = std::sqrt(impl.photon_radius2) / impl.initial_photon_radius;
+      view.caustics.radius_per_distance = kInitialRadiusPixels * camera.pixel_angle() * shrink;
    }
 
    impl.timer.start();

@@ -25,14 +25,73 @@ struct PhotonRay {
    Vec3 power;
 };
 
-// Direction uniforme dans le cône d'axe axis et de demi-angle acos(cos_max)
-RT_HOST_DEVICE inline Vec3 sample_cone(Vec3 axis, float cos_max, Vec2 u) {
-   const float cos_theta = 1.0f - (u.x * (1.0f - cos_max));
+// Direction uniforme dans le cône d'axe axis et de demi-angle θ, avec one_minus_cos = 1 - cos θ
+RT_HOST_DEVICE inline Vec3 sample_cone(Vec3 axis, float one_minus_cos, Vec2 u) {
+   const float cos_theta = 1.0f - (u.x * one_minus_cos);
    const float sin_theta = std::sqrt(std::fmax(0.0f, 1.0f - (cos_theta * cos_theta)));
    const float phi = 2.0f * kPi * u.y;
    return make_frame(axis).to_world(
       {std::cos(phi) * sin_theta, std::sin(phi) * sin_theta, cos_theta}
    );
+}
+
+// Cône des directions qui partent de origin et touchent la sphère d'une cible
+struct TargetCone {
+   Vec3 axis;
+   float one_minus_cos = 2.0f; // 1 - cos du demi-angle, 2 : toutes les directions
+};
+
+RT_HOST_DEVICE inline TargetCone target_cone(const PhotonTarget& target, Vec3 origin) {
+   const Vec3 to_center = target.center - origin;
+   const float d2 = length_squared(to_center);
+   const float r2 = target.radius * target.radius;
+   if (d2 <= r2) {
+      return {.axis = {0.0f, 0.0f, 1.0f}, .one_minus_cos = 2.0f};
+   }
+   // 1 - cos θ = sin² θ / (1 + cos θ), sans perte de précision pour les cibles lointaines
+   const float sin2 = r2 / d2;
+   return {
+      .axis = to_center / std::sqrt(d2),
+      .one_minus_cos = sin2 / (1.0f + std::sqrt(1.0f - sin2)),
+   };
+}
+
+RT_HOST_DEVICE inline bool in_cone(const TargetCone& cone, Vec3 direction) {
+   return 1.0f - dot(cone.axis, direction) <= cone.one_minus_cos;
+}
+
+struct TargetedDirection {
+   Vec3 direction;
+   float pdf = 0.0f; // par angle solide
+};
+
+// Direction vers une cible tirée selon son angle solide. Les cônes peuvent se recouvrir : la
+// densité est celle du mélange, qui compte tous les cônes contenant la direction.
+RT_HOST_DEVICE inline TargetedDirection sample_targets(SceneView view, Vec3 origin, Pcg32& rng) {
+   float total = 0.0f;
+   for (std::uint32_t i = 0; i < view.photon_target_count; ++i) {
+      total += target_cone(view.photon_targets[i], origin).one_minus_cos;
+   }
+   float u = rng.next_float() * total;
+   TargetCone chosen = target_cone(view.photon_targets[0], origin);
+   for (std::uint32_t i = 0; i < view.photon_target_count; ++i) {
+      chosen = target_cone(view.photon_targets[i], origin);
+      if (u < chosen.one_minus_cos) {
+         break;
+      }
+      u -= chosen.one_minus_cos;
+   }
+   const Vec3 direction = sample_cone(
+      chosen.axis,
+      chosen.one_minus_cos,
+      {rng.next_float(), rng.next_float()}
+   );
+   float covering = 0.0f;
+   for (std::uint32_t i = 0; i < view.photon_target_count; ++i) {
+      covering += in_cone(target_cone(view.photon_targets[i], origin), direction) ? 1.0f : 0.0f;
+   }
+   // Angle solide d'un cône : 2π (1 - cos θ)
+   return {.direction = direction, .pdf = std::fmax(covering, 1.0f) / (2.0f * kPi * total)};
 }
 
 // Photon émis par une lumière choisie uniformément. Sa puissance est le flux de la lumière divisé
@@ -52,11 +111,20 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
       const Vec3 y = sample_point_on_triangle(v0, v1, v2, rng);
       const Vec3 cross_l = cross(v1 - v0, v2 - v0);
       const float area = 0.5f * length(cross_l);
+      const Material material = view.materials[view.material_indices[triangle]];
+      if (view.photon_target_count > 0) {
+         const TargetedDirection target = sample_targets(view, y, rng);
+         const Vec3 n_l = normalize(cross_l);
+         const float cos_l = dot(n_l, target.direction);
+         return {
+            .ray = {y + (n_l * (cos_l > 0.0f ? kRayOffset : -kRayOffset)), target.direction},
+            .power = material.emission * (std::fabs(cos_l) * area * light_choice / target.pdf),
+         };
+      }
       const Vec3 side = rng.next_float() < 0.5f ? normalize(cross_l) : -normalize(cross_l);
       const Vec3 direction = make_frame(side).to_world(
          square_to_cosine_hemisphere({rng.next_float(), rng.next_float()})
       );
-      const Material material = view.materials[view.material_indices[triangle]];
       return {
          .ray = {y + (side * kRayOffset), direction},
          .power = material.emission * (2.0f * kPi * area * light_choice),
@@ -64,6 +132,16 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
    }
 
    const PunctualLight& light = view.punctual_lights[k - view.emissive_triangle_count];
+   if (view.photon_target_count > 0 && light.type != PunctualLight::Type::Directional) {
+      const TargetedDirection target = sample_targets(view, light.position, rng);
+      const float attenuation = light.type == PunctualLight::Type::Spot
+                                   ? spot_attenuation(light, target.direction)
+                                   : 1.0f;
+      return {
+         .ray = {light.position, target.direction},
+         .power = light.intensity * (attenuation * light_choice / target.pdf),
+      };
+   }
    const Vec2 u{rng.next_float(), rng.next_float()};
    switch (light.type) {
       case PunctualLight::Type::Point:
@@ -72,7 +150,7 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
             .power = light.intensity * (4.0f * kPi * light_choice),
          };
       case PunctualLight::Type::Spot: {
-         const Vec3 direction = sample_cone(light.direction, light.cos_outer, u);
+         const Vec3 direction = sample_cone(light.direction, 1.0f - light.cos_outer, u);
          const float solid_angle = 2.0f * kPi * (1.0f - light.cos_outer);
          return {
             .ray = {light.position, direction},

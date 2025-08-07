@@ -70,8 +70,10 @@ std::string caustic_description(const Renderer& renderer) {
    }
    const Renderer::CausticSettings settings = renderer.caustic_settings();
    return std::format(
-      "photons progressifs : {} par passe, rayon initial {:.4g}, alpha {:.3g}",
+      "photons progressifs : {} par passe, rayon initial {:.3g} pixels (au plus {:.4g}), alpha "
+      "{:.3g}",
       settings.photons_per_pass,
+      settings.initial_radius_pixels,
       settings.initial_radius,
       settings.alpha
    );

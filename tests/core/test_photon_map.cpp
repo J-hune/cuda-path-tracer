@@ -36,13 +36,15 @@ TEST_CASE("grille de photons : mêmes voisins qu'une recherche exhaustive", "[ph
             (2.0f * rng.next_float()) - 1.0f,
             (0.2f * rng.next_float()) - 0.1f,
          };
+         // Rayon de la grille, ou plus petit (rayon suivant la taille d'un pixel)
+         const float radius = q % 2 == 0 ? kRadius : 0.3f * kRadius;
          std::vector<float> found;
-         rt::for_each_photon_near(map.view, x, [&](const rt::Photon& p) {
+         rt::for_each_photon_near(map.view, x, radius, [&](const rt::Photon& p) {
             found.push_back(p.power.x);
          });
          std::vector<float> expected;
          for (const rt::Photon& p : photons) {
-            if (rt::length_squared(p.position - x) < kRadius * kRadius) {
+            if (rt::length_squared(p.position - x) < radius * radius) {
                expected.push_back(p.power.x);
             }
          }

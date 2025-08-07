@@ -44,8 +44,9 @@ public:
    // Paramètres des caustiques par photons
    struct CausticSettings {
       std::uint32_t photons_per_pass = 0;
-      float initial_radius = 0.0f;
-      float alpha = 0.0f; // vitesse de diminution du rayon
+      float initial_radius = 0.0f;        // rayon maximal
+      float initial_radius_pixels = 0.0f; // vu depuis la caméra
+      float alpha = 0.0f;                 // vitesse de diminution du rayon
    };
 
    Renderer(const rt::Scene& scene, const rt::Bvh& bvh, int width, int height);

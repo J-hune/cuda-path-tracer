@@ -11,7 +11,9 @@
 #include "cpu_photon_map.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
+#include "scene/photon_targets.h"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -32,6 +34,7 @@ constexpr rt::SurfaceParams kFloor{.base_color = {0.8f, 0.8f, 0.8f}};
 struct TestScene {
    rt::Scene scene;
    rt::Bvh bvh;
+   std::vector<rt::PhotonTarget> targets; // vide : émission dans toutes les directions
 
    [[nodiscard]] rt::SceneView view() const {
       rt::SceneView view;
@@ -46,6 +49,8 @@ struct TestScene {
       view.punctual_lights = scene.punctual_lights.data();
       view.punctual_light_count = static_cast<std::uint32_t>(scene.punctual_lights.size());
       view.uvs = scene.uvs.data();
+      view.photon_targets = targets.data();
+      view.photon_target_count = static_cast<std::uint32_t>(targets.size());
       return view;
    }
 };
@@ -117,6 +122,11 @@ rt::Vec3 floor_radiance(const rt::SceneView& view, int samples) {
       sum += rt::trace_path(ray, view, rng, ray_count);
    }
    return sum / static_cast<float>(samples);
+}
+
+TestScene targeted(TestScene t) {
+   t.targets = rt::photon_targets(t.scene);
+   return t;
 }
 
 // Spot étroit dirigé selon direction, pleine intensité au centre du cône
@@ -193,9 +203,28 @@ TEST_CASE("photons : à travers une lame d'indice 1, l'éclairement est celui du
    // Spot à 2 m au-dessus du sol : E = I / d² au centre
    const TestScene t = make_scene(spot({0, 0, 2}, {0, 0, -1}), true, false);
    int stored = 0;
-   const float irradiance = irradiance_at_origin(t, 400'000, 0.1f, stored);
-   CHECK(stored > 0);
-   CHECK_THAT(irradiance, WithinRel(100.0f / 4.0f, 0.03f));
+   CHECK_THAT(irradiance_at_origin(t, 400'000, 0.1f, stored), WithinRel(100.0f / 4.0f, 0.03f));
+   CHECK_THAT(
+      irradiance_at_origin(targeted(t), 400'000, 0.1f, stored),
+      WithinRel(100.0f / 4.0f, 0.03f)
+   );
+}
+
+TEST_CASE("photons : l'émission dirigée vers une petite lame garde l'éclairement", "[photon]") {
+   // Lampe ponctuelle à 3 m au-dessus d'une lame de 60 cm : E = I / 3² sous la lame
+   TestScene t = make_scene({.position = {0, 0, 3}, .intensity = {100, 100, 100}}, false, false);
+   add_quad(t.scene, 0.3f, 1.1f, true, kGlassMaterial);
+   add_quad(t.scene, 0.3f, 1.0f, false, kGlassMaterial);
+   t.bvh = rt::build_bvh(t.scene);
+
+   int stored = 0;
+   int stored_targeted = 0;
+   const float uniform = irradiance_at_origin(t, 400'000, 0.1f, stored);
+   const float irradiance = irradiance_at_origin(targeted(t), 400'000, 0.1f, stored_targeted);
+   CHECK_THAT(irradiance, WithinRel(100.0f / 9.0f, 0.03f));
+   // Presque tous les photons dirigés traversent la lame, contre 1 % sans émission dirigée
+   CHECK(stored_targeted > 20 * stored);
+   CHECK(uniform > 0.0f);
 }
 
 TEST_CASE(
@@ -204,9 +233,12 @@ TEST_CASE(
 ) {
    // Spot à 1 m dirigé vers un miroir à 2 m : son image est à 3 m du sol
    const TestScene t = make_scene(spot({0, 0, 1}, {0, 0, 1}), false, true);
-   int stored = 0;
-   const float irradiance = irradiance_at_origin(t, 400'000, 0.1f, stored);
-   CHECK_THAT(irradiance, WithinRel(100.0f / 9.0f, 0.03f));
+   for (const TestScene& scene : {t, targeted(t)}) {
+      INFO("cibles : " << scene.targets.size());
+      int stored = 0;
+      const float irradiance = irradiance_at_origin(scene, 2'000'000, 0.1f, stored);
+      CHECK_THAT(irradiance, WithinRel(100.0f / 9.0f, 0.03f));
+   }
 }
 
 TEST_CASE("caustiques : sous la lame, les photons apportent la lumière du spot", "[photon]") {
@@ -238,4 +270,15 @@ TEST_CASE("caustiques : photons et path tracer ne comptent pas deux fois la lumi
 
    CHECK(path_traced.x > 0.0f);
    CHECK_THAT(with_photons.x, WithinRel(path_traced.x, 0.03f));
+
+   // Émission dirigée depuis la lampe surfacique vers la lame
+   const TestScene targeted_scene = targeted(t);
+   const rt::test::CpuPhotonMap targeted_map(
+      rt::test::trace_photons(targeted_scene.view(), 4'000'000, 9),
+      1u << 16,
+      0.15f
+   );
+   rt::SceneView targeted_view = targeted_scene.view();
+   targeted_view.caustics = targeted_map.view;
+   CHECK_THAT(floor_radiance(targeted_view, 64).x, WithinRel(path_traced.x, 0.03f));
 }

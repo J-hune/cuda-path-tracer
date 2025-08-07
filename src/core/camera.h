@@ -41,6 +41,11 @@ public:
       return {position_, direction};
    }
 
+   // Angle couvert par un pixel, en radians (au centre de l'image)
+   [[nodiscard]] RT_HOST_DEVICE float pixel_angle() const {
+      return 2.f * half_height_ * inv_height_;
+   }
+
    // Direction exprimée dans le repère de la caméra : x vers la droite, y vers le haut, z vers
    // l'observateur
    [[nodiscard]] RT_HOST_DEVICE Vec3 to_camera_space(Vec3 world) const {

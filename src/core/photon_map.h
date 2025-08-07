@@ -17,6 +17,13 @@ struct Photon {
    Vec3 normal;    // normale géométrique, du côté d'arrivée
 };
 
+// Sphère englobant des surfaces qui créent des caustiques (verre, métal poli) : les photons sont
+// émis vers elles seules (« projection maps » de Jensen)
+struct PhotonTarget {
+   Vec3 center;
+   float radius = 0.0f;
+};
+
 // Coordonnées entières d'une cellule de la grille
 struct Cell {
    int x = 0;
@@ -34,7 +41,10 @@ struct PhotonMapView {
    const std::uint32_t* bucket_start = nullptr;
    const std::uint32_t* bucket_size = nullptr;
    std::uint32_t bucket_count = 0; // puissance de 2
-   float radius = 0.0f;
+   float radius = 0.0f;            // rayon maximal des recherches
+   // Rayon vu depuis la caméra, par unité de distance parcourue : quelques pixels à toute distance.
+   // 0 : toujours radius.
+   float radius_per_distance = 0.0f;
 };
 
 RT_HOST_DEVICE inline Cell cell_of(Vec3 p, float cell_size) {
@@ -54,16 +64,21 @@ RT_HOST_DEVICE inline std::uint32_t cell_hash(Cell cell, std::uint32_t bucket_co
    return h & (bucket_count - 1u);
 }
 
-// Appelle visit(photon) pour chaque photon à moins de map.radius de x
+// Appelle visit(photon) pour chaque photon à moins de radius de x (radius <= map.radius)
 template <typename Visit>
-RT_HOST_DEVICE void for_each_photon_near(const PhotonMapView& map, Vec3 x, Visit&& visit) {
+RT_HOST_DEVICE void for_each_photon_near(
+   const PhotonMapView& map,
+   Vec3 x,
+   float radius,
+   Visit&& visit
+) {
    if (map.bucket_count == 0) {
       return;
    }
    const float cell_size = 2.0f * map.radius;
-   const float radius2 = map.radius * map.radius;
-   const Cell low = cell_of(x - Vec3{map.radius, map.radius, map.radius}, cell_size);
-   const Cell high = cell_of(x + Vec3{map.radius, map.radius, map.radius}, cell_size);
+   const float radius2 = radius * radius;
+   const Cell low = cell_of(x - Vec3{radius, radius, radius}, cell_size);
+   const Cell high = cell_of(x + Vec3{radius, radius, radius}, cell_size);
    for (int cz = low.z; cz <= high.z; ++cz) {
       for (int cy = low.y; cy <= high.y; ++cy) {
          for (int cx = low.x; cx <= high.x; ++cx) {
