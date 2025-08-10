@@ -67,6 +67,7 @@ TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[s
    const rt::SceneView view{
       .nodes = bvh.nodes.data(),
       .triangle_indices = bvh.triangle_indices.data(),
+      .bvh_triangles = bvh.triangles.data(),
       .positions = scene.positions.data(),
       .indices = scene.indices.data(),
       .materials = nullptr,
@@ -108,6 +109,7 @@ TEST_CASE("intersect_scene sur une scène vide", "[scene_view]") {
    const rt::SceneView view{
       .nodes = nullptr,
       .triangle_indices = nullptr,
+      .bvh_triangles = nullptr,
       .positions = nullptr,
       .indices = nullptr,
       .materials = nullptr,

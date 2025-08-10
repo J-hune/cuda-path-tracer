@@ -65,6 +65,7 @@ rt::SceneView make_view(const rt::Scene& scene, const rt::Bvh& bvh) {
    return {
       .nodes = bvh.nodes.data(),
       .triangle_indices = bvh.triangle_indices.data(),
+      .bvh_triangles = bvh.triangles.data(),
       .positions = scene.positions.data(),
       .indices = scene.indices.data(),
       .materials = scene.materials.data(),

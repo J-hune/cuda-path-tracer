@@ -40,6 +40,7 @@ struct TestScene {
       rt::SceneView view;
       view.nodes = bvh.nodes.data();
       view.triangle_indices = bvh.triangle_indices.data();
+      view.bvh_triangles = bvh.triangles.data();
       view.positions = scene.positions.data();
       view.indices = scene.indices.data();
       view.materials = scene.materials.data();

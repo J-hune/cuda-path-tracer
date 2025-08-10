@@ -228,6 +228,14 @@ Bvh build_bvh(const Scene& scene, BvhSplit split) {
    update_bounds(ctx, 0);
    subdivide(ctx, 0);
 
+   ctx.bvh.triangles.reserve(triangle_count);
+   for (const std::uint32_t triangle : ctx.bvh.triangle_indices) {
+      ctx.bvh.triangles.push_back({
+         .v0 = vertex(scene, triangle, 0),
+         .v1 = vertex(scene, triangle, 1),
+         .v2 = vertex(scene, triangle, 2),
+      });
+   }
    return ctx.bvh;
 }
 

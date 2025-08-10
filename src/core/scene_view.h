@@ -20,6 +20,7 @@ namespace rt {
 struct SceneView {
    const BvhNode* nodes = nullptr;
    const std::uint32_t* triangle_indices = nullptr;
+   const BvhTriangle* bvh_triangles = nullptr;
    const Vec3* positions = nullptr;
    const std::uint32_t* indices = nullptr;
    const Material* materials = nullptr;
@@ -74,14 +75,11 @@ RT_HOST_DEVICE constexpr bool traverse(Ray ray, SceneView scene, float t_max, Hi
       const BvhNode& node = scene.nodes[node_index];
       if (node.count > 0) {
          for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
-            const std::uint32_t triangle = scene.triangle_indices[i];
-            const Vec3 v0 = scene.positions[scene.indices[3 * triangle + 0]];
-            const Vec3 v1 = scene.positions[scene.indices[3 * triangle + 1]];
-            const Vec3 v2 = scene.positions[scene.indices[3 * triangle + 2]];
-
+            const BvhTriangle triangle = scene.bvh_triangles[i];
             TriangleHit triangle_hit{};
-            if (intersect_triangle(ray, v0, v1, v2, triangle_hit) && triangle_hit.t < hit.t) {
-               hit = {triangle_hit.t, triangle, triangle_hit.u, triangle_hit.v};
+            if (intersect_triangle(ray, triangle.v0, triangle.v1, triangle.v2, triangle_hit) &&
+                triangle_hit.t < hit.t) {
+               hit = {triangle_hit.t, scene.triangle_indices[i], triangle_hit.u, triangle_hit.v};
                found = true;
                if constexpr (any_hit) {
                   return true;

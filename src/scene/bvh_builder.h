@@ -12,6 +12,7 @@ namespace rt {
 struct Bvh {
    std::vector<BvhNode> nodes;                  // nodes[0] est la racine
    std::vector<std::uint32_t> triangle_indices; // indices de triangles, réordonnés par feuille
+   std::vector<BvhTriangle> triangles;          // leurs sommets, dans le même ordre
 };
 
 // Stratégie de découpe d'un nœud en deux enfants

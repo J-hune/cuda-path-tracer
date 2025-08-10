@@ -155,6 +155,7 @@ struct Renderer::Impl {
       height(height),
       nodes(bvh.nodes.size()),
       triangle_indices(bvh.triangle_indices.size()),
+      bvh_triangles(bvh.triangles.size()),
       positions(scene.positions.size()),
       indices(scene.indices.size()),
       materials(scene.materials.size()),
@@ -177,6 +178,7 @@ struct Renderer::Impl {
       ) {
       nodes.upload(bvh.nodes);
       triangle_indices.upload(bvh.triangle_indices);
+      bvh_triangles.upload(bvh.triangles);
       positions.upload(scene.positions);
       indices.upload(scene.indices);
       materials.upload(scene.materials);
@@ -195,6 +197,7 @@ struct Renderer::Impl {
       return {
          .nodes = nodes.data(),
          .triangle_indices = triangle_indices.data(),
+         .bvh_triangles = bvh_triangles.data(),
          .positions = positions.data(),
          .indices = indices.data(),
          .materials = materials.data(),
@@ -220,6 +223,7 @@ struct Renderer::Impl {
    int height;
    DeviceBuffer<rt::BvhNode> nodes;
    DeviceBuffer<std::uint32_t> triangle_indices;
+   DeviceBuffer<rt::BvhTriangle> bvh_triangles;
    DeviceBuffer<rt::Vec3> positions;
    DeviceBuffer<std::uint32_t> indices;
    DeviceBuffer<rt::Material> materials;
