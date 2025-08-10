@@ -46,10 +46,8 @@ RT_HOST_DEVICE inline bool is_occluded(SceneView view, Vec3 origin, Vec3 target)
    const Vec3 direction = target - origin;
    const float distance = length(direction);
    const Ray ray{origin, normalize(direction)};
-   Hit hit{};
-
    // La lampe visée ne compte pas comme obstacle
-   return intersect_scene(ray, view, hit) && hit.t < distance - kRayOffset;
+   return intersects_before(ray, view, distance - kRayOffset);
 }
 
 // Échantillonne un triangle émissif au hasard et calcule la contribution de la lumière directe

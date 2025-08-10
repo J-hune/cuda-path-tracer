@@ -18,6 +18,16 @@ struct Aabb {
 };
 
 // Méthode des dalles. inv_dir = 1 / direction, composante par composante
+// Distance d'entrée du rayon dans la boîte, kInfinity s'il la manque avant t_max
+RT_HOST_DEVICE constexpr float aabb_entry(Ray ray, Vec3 inv_dir, Aabb box, float t_max) {
+   const Vec3 t0 = (box.min - ray.origin) * inv_dir;
+   const Vec3 t1 = (box.max - ray.origin) * inv_dir;
+   const float t_enter = max_component(min(t0, t1));
+   const float t_exit = min_component(max(t0, t1));
+   const bool hit = t_enter <= t_exit && t_exit > 0.f && t_enter < t_max;
+   return hit ? t_enter : kInfinity;
+}
+
 RT_HOST_DEVICE constexpr bool intersect_aabb(Ray ray, Vec3 inv_dir, Aabb box, float t_max) {
    const Vec3 t0 = (box.min - ray.origin) * inv_dir;
    const Vec3 t1 = (box.max - ray.origin) * inv_dir;

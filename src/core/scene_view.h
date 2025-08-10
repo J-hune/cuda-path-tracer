@@ -52,28 +52,26 @@ struct Hit {
    float v;
 };
 
-RT_HOST_DEVICE constexpr bool intersect_scene(Ray ray, SceneView scene, Hit& hit) {
-   std::uint32_t stack[64];
-   std::uint32_t stack_size = 0;
-   stack[stack_size++] = 0; // empiler la racine
-   hit.t = kInfinity;
-   const Vec3 inv_dir{1.f / ray.direction.x, 1.f / ray.direction.y, 1.f / ray.direction.z};
-
+// Parcours du BVH : le plus proche des deux enfants est visité d'abord, l'autre est empilé. Avec
+// any_hit, le parcours s'arrête au premier triangle touché avant t_max (rayons d'ombre).
+template <bool any_hit>
+RT_HOST_DEVICE constexpr bool traverse(Ray ray, SceneView scene, float t_max, Hit& hit) {
+   hit.t = t_max;
    // nodes vaut nullptr si la scène est vide
    if (scene.nodes == nullptr) {
       return false;
    }
+   const Vec3 inv_dir{1.f / ray.direction.x, 1.f / ray.direction.y, 1.f / ray.direction.z};
+   if (aabb_entry(ray, inv_dir, scene.nodes[0].bounds, hit.t) == kInfinity) {
+      return false;
+   }
 
-   while (stack_size > 0) {
-      const std::uint32_t node_index = stack[--stack_size];
+   std::uint32_t stack[64];
+   std::uint32_t stack_size = 0;
+   std::uint32_t node_index = 0;
+   bool found = false;
+   while (true) {
       const BvhNode& node = scene.nodes[node_index];
-
-      // Si le rayon ne touche pas la boîte du nœud, on passe au suivant
-      if (!intersect_aabb(ray, inv_dir, node.bounds, hit.t)) {
-         continue;
-      }
-
-      // Si c'est une feuille, on teste tous ses triangles
       if (node.count > 0) {
          for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
             const std::uint32_t triangle = scene.triangle_indices[i];
@@ -84,15 +82,50 @@ RT_HOST_DEVICE constexpr bool intersect_scene(Ray ray, SceneView scene, Hit& hit
             TriangleHit triangle_hit{};
             if (intersect_triangle(ray, v0, v1, v2, triangle_hit) && triangle_hit.t < hit.t) {
                hit = {triangle_hit.t, triangle, triangle_hit.u, triangle_hit.v};
+               found = true;
+               if constexpr (any_hit) {
+                  return true;
+               }
             }
          }
       } else {
-         stack[stack_size++] = node.first;     // empiler l'enfant gauche
-         stack[stack_size++] = node.first + 1; // empiler l'enfant droit
+         const std::uint32_t left = node.first;
+         const std::uint32_t right = node.first + 1;
+         const float t_left = aabb_entry(ray, inv_dir, scene.nodes[left].bounds, hit.t);
+         const float t_right = aabb_entry(ray, inv_dir, scene.nodes[right].bounds, hit.t);
+         if (t_left != kInfinity && t_right != kInfinity) {
+            const bool left_first = t_left <= t_right;
+            stack[stack_size++] = left_first ? right : left;
+            node_index = left_first ? left : right;
+            continue;
+         }
+         if (t_left != kInfinity || t_right != kInfinity) {
+            node_index = t_left != kInfinity ? left : right;
+            continue;
+         }
+      }
+
+      // Nœud suivant sur la pile, en sautant ceux qui sont plus loin que le triangle trouvé
+      bool next = false;
+      while (stack_size > 0 && !next) {
+         node_index = stack[--stack_size];
+         next = aabb_entry(ray, inv_dir, scene.nodes[node_index].bounds, hit.t) != kInfinity;
+      }
+      if (!next) {
+         return found;
       }
    }
+}
 
-   return hit.t < kInfinity;
+// Intersection la plus proche
+RT_HOST_DEVICE constexpr bool intersect_scene(Ray ray, SceneView scene, Hit& hit) {
+   return traverse<false>(ray, scene, kInfinity, hit);
+}
+
+// Vrai si un triangle coupe le rayon avant t_max
+RT_HOST_DEVICE constexpr bool intersects_before(Ray ray, SceneView scene, float t_max) {
+   Hit hit{};
+   return traverse<true>(ray, scene, t_max, hit);
 }
 
 } // namespace rt

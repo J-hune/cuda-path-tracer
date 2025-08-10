@@ -94,6 +94,10 @@ TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[s
          REQUIRE(actual.triangle == expected.triangle);
          REQUIRE(actual.t == expected.t);
       }
+
+      // Rayon d'ombre : un obstacle avant t_max existe si et seulement si le plus proche y est
+      const float t_max = 40.f * rng.next_float();
+      REQUIRE(rt::intersects_before(ray, view, t_max) == (expected_hit && expected.t < t_max));
    }
 
    // Le test n'a de sens que si une bonne partie des rayons touche quelque chose
