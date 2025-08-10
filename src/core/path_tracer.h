@@ -356,6 +356,119 @@ struct FirstHit {
    Vec3 normal{0.0f, 0.0f, 0.0f}; // normale d'ombrage, nulle si le rayon ne touche rien
 };
 
+// État d'un chemin entre deux rebonds
+struct PathState {
+   Ray ray;
+   Vec3 radiance{0.0f, 0.0f, 0.0f};
+   Vec3 throughput{1.0f, 1.0f, 1.0f};
+   int bounce = 0;
+   float distance = 0.0f; // parcourue depuis la caméra
+   // Après un rebond spéculaire, l'éclairage direct n'a pas été calculé : l'émission touchée compte
+   // entièrement. Après un rebond de la BSDF, elle est pondérée par MIS face à l'éclairage direct.
+   bool specular_bounce = false;
+   float bsdf_pdf = 0.0f;
+   // Avec les photons : le chemin est passé par une surface diffuse, puis seulement par du verre ou
+   // du métal poli. La lumière qu'il trouve alors est une caustique, déjà apportée à cette surface
+   // par les photons.
+   bool after_diffuse = false;
+   bool caustic_path = false;
+};
+
+// Avance le chemin d'un rebond. Renvoie false quand il est terminé : path.radiance est alors la
+// lumière qu'il rapporte. ray_count est incrémenté du nombre de rayons lancés.
+RT_HOST_DEVICE inline bool trace_bounce(
+   PathState& path,
+   SceneView view,
+   Pcg32& rng,
+   std::uint32_t& ray_count,
+   FirstHit* first_hit
+) {
+   const bool photons = view.caustics.bucket_count > 0;
+   // Seul l'éclairage indirect est écrêté
+   const float max_contribution = path.bounce > 0 ? view.firefly_clamp : 0.0f;
+   Hit hit{};
+   ++ray_count;
+   if (!intersect_scene(path.ray, view, hit)) {
+      if (path.bounce == 0 && first_hit != nullptr) {
+         *first_hit = {.albedo = view.environment.radiance(path.ray.direction)};
+      }
+      const Vec3 sky = path.throughput * view.environment.radiance(path.ray.direction);
+      path.radiance += clamp_contribution(sky, max_contribution);
+      return false;
+   }
+
+   path.distance += hit.t;
+   const Material material = view.materials[view.material_indices[hit.triangle]];
+   if (max_component(material.emission) > 0.0f && !path.caustic_path) {
+      if (path.bounce == 0 || path.specular_bounce) {
+         path.radiance += clamp_contribution(path.throughput * material.emission, max_contribution);
+      } else if (view.use_mis) {
+         const float pdf_light = light_pdf(view, hit.triangle, path.ray.direction, hit.t);
+         const Vec3 emitted = path.throughput * material.emission *
+                              power_heuristic(path.bsdf_pdf, pdf_light);
+         path.radiance += clamp_contribution(emitted, max_contribution);
+      }
+   }
+   const Vec3 albedo = surface_albedo(view, material, hit);
+   if (path.bounce == 0 && first_hit != nullptr) {
+      const Vec3 facing = facing_normal(view, hit.triangle, path.ray.direction);
+      *first_hit = {.albedo = albedo, .normal = shading_normal(view, hit, facing)};
+   }
+
+   if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
+      // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
+      path.ray = scatter_glass(view, hit, material, albedo, path.ray, rng, path.throughput);
+      path.specular_bounce = true;
+      path.caustic_path = path.after_diffuse;
+   } else {
+      // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
+      const ShadingPoint shading = make_shading_point(view, hit, material, albedo, path.ray);
+      const Vec3 n_g = shading.geometric_normal;
+      const Vec3 n = shading.frame.normal;
+      const bool glossy = photons && is_glossy_metal(material);
+      if (!(glossy && path.after_diffuse)) {
+         const Vec3 direct = path.throughput * direct_light(view, shading, rng, ray_count);
+         path.radiance += clamp_contribution(direct, max_contribution);
+      }
+      if (photons && !glossy) {
+         // Vu depuis la caméra (à travers du verre ou un miroir au plus), le rayon suit la taille
+         // d'un pixel ; après un rebond diffus, le flou ne se voit plus : rayon maximal
+         const PhotonMapView& map = view.caustics;
+         const float radius = path.after_diffuse || map.radius_per_distance <= 0.0f
+                                 ? map.radius
+                                 : std::fmin(map.radius, path.distance * map.radius_per_distance);
+         path.radiance += path.throughput * gather_caustics(map, shading, radius);
+         path.after_diffuse = true;
+      }
+      path.caustic_path = glossy && path.after_diffuse;
+
+      const BsdfSample bsdf = principled::sample(
+         shading.params,
+         shading.wo,
+         {rng.next_float(), rng.next_float()}
+      );
+      const Vec3 wi = shading.frame.to_world(bsdf.wi);
+      // Une direction sous la surface réelle ne peut pas repartir de ce côté
+      if (bsdf.pdf <= 0.0f || dot(wi, n_g) <= 0.0f) {
+         return false;
+      }
+      path.ray = {shading.position + (n_g * kRayOffset), wi};
+      path.throughput = path.throughput * bsdf.weight * shadow_terminator(n_g, n, wi);
+      path.bsdf_pdf = bsdf.pdf;
+      path.specular_bounce = false;
+   }
+
+   if (path.bounce >= kRouletteStart) {
+      const float p = std::fmin(max_component(path.throughput), 0.95f);
+      if (rng.next_float() >= p) {
+         return false;
+      }
+      path.throughput /= p;
+   }
+   ++path.bounce;
+   return path.bounce < kMaxBounces;
+}
+
 // Suit un chemin à partir du rayon caméra et renvoie la lumière qu'il rapporte.
 // ray_count est incrémenté du nombre de rayons lancés (rebonds et rayons d'ombre)
 RT_HOST_DEVICE inline Vec3 trace_path(
@@ -365,105 +478,10 @@ RT_HOST_DEVICE inline Vec3 trace_path(
    std::uint32_t& ray_count,
    FirstHit* first_hit = nullptr
 ) {
-   Vec3 radiance{0.0f, 0.0f, 0.0f};
-   Vec3 throughput{1.0f, 1.0f, 1.0f};
-   // Après un rebond spéculaire, l'éclairage direct n'a pas été calculé : l'émission touchée compte
-   // entièrement. Après un rebond de la BSDF, elle est pondérée par MIS face à l'éclairage direct.
-   bool specular_bounce = false;
-   float bsdf_pdf = 0.0f;
-   // Avec les photons : le chemin est passé par une surface diffuse, puis seulement par du verre ou
-   // du métal poli. La lumière qu'il trouve alors est une caustique, déjà apportée à cette surface
-   // par les photons.
-   const bool photons = view.caustics.bucket_count > 0;
-   bool after_diffuse = false;
-   bool caustic_path = false;
-   float distance = 0.0f; // parcourue depuis la caméra
-
-   for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
-      // Seul l'éclairage indirect est écrêté
-      const float max_contribution = bounce > 0 ? view.firefly_clamp : 0.0f;
-      Hit hit{};
-      ++ray_count;
-      if (!intersect_scene(ray, view, hit)) {
-         if (bounce == 0 && first_hit != nullptr) {
-            *first_hit = {.albedo = view.environment.radiance(ray.direction)};
-         }
-         const Vec3 sky = throughput * view.environment.radiance(ray.direction);
-         radiance += clamp_contribution(sky, max_contribution);
-         return radiance;
-      }
-
-      distance += hit.t;
-      const Material material = view.materials[view.material_indices[hit.triangle]];
-      if (max_component(material.emission) > 0.0f && !caustic_path) {
-         if (bounce == 0 || specular_bounce) {
-            radiance += clamp_contribution(throughput * material.emission, max_contribution);
-         } else if (view.use_mis) {
-            const float pdf_light = light_pdf(view, hit.triangle, ray.direction, hit.t);
-            const Vec3 emitted = throughput * material.emission *
-                                 power_heuristic(bsdf_pdf, pdf_light);
-            radiance += clamp_contribution(emitted, max_contribution);
-         }
-      }
-      const Vec3 albedo = surface_albedo(view, material, hit);
-      if (bounce == 0 && first_hit != nullptr) {
-         const Vec3 facing = facing_normal(view, hit.triangle, ray.direction);
-         *first_hit = {.albedo = albedo, .normal = shading_normal(view, hit, facing)};
-      }
-
-      if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
-         // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
-         ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput);
-         specular_bounce = true;
-         caustic_path = after_diffuse;
-      } else {
-         // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
-         const ShadingPoint shading = make_shading_point(view, hit, material, albedo, ray);
-         const Vec3 n_g = shading.geometric_normal;
-         const Vec3 n = shading.frame.normal;
-         const bool glossy = photons && is_glossy_metal(material);
-         if (!(glossy && after_diffuse)) {
-            const Vec3 direct = throughput * direct_light(view, shading, rng, ray_count);
-            radiance += clamp_contribution(direct, max_contribution);
-         }
-         if (photons && !glossy) {
-            // Vu depuis la caméra (à travers du verre ou un miroir au plus), le rayon suit la
-            // taille d'un pixel ; après un rebond diffus, le flou ne se voit plus : rayon maximal
-            const PhotonMapView& map = view.caustics;
-            const float radius = after_diffuse || map.radius_per_distance <= 0.0f
-                                    ? map.radius
-                                    : std::fmin(map.radius, distance * map.radius_per_distance);
-            radiance += throughput * gather_caustics(map, shading, radius);
-            after_diffuse = true;
-         }
-         caustic_path = glossy && after_diffuse;
-
-         const BsdfSample bsdf = principled::sample(
-            shading.params,
-            shading.wo,
-            {rng.next_float(), rng.next_float()}
-         );
-         const Vec3 wi = shading.frame.to_world(bsdf.wi);
-         // Une direction sous la surface réelle ne peut pas repartir de ce côté
-         if (bsdf.pdf <= 0.0f || dot(wi, n_g) <= 0.0f) {
-            return radiance;
-         }
-         ray = {shading.position + (n_g * kRayOffset), wi};
-         throughput = throughput * bsdf.weight * shadow_terminator(n_g, n, wi);
-         bsdf_pdf = bsdf.pdf;
-         specular_bounce = false;
-      }
-
-      if (bounce >= kRouletteStart) {
-         const float p = std::fmin(max_component(throughput), 0.95f);
-         if (rng.next_float() >= p) {
-            return radiance;
-         }
-         throughput /= p;
-      }
+   PathState path{.ray = ray};
+   while (trace_bounce(path, view, rng, ray_count, first_hit)) {
    }
-
-   return radiance;
+   return path.radiance;
 }
 
 } // namespace rt

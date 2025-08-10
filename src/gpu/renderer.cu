@@ -5,7 +5,6 @@
 #include "core/material.h"
 #include "core/path_tracer.h"
 #include "core/photon_map.h"
-#include "core/ray.h"
 #include "core/rng.h"
 #include "core/scene_view.h"
 #include "core/texture.h"
@@ -38,6 +37,7 @@ namespace {
 
 // Ajoute un échantillon par pixel (l'échantillon numéro sample_index) au tampon d'accumulation
 constexpr std::uint32_t kPhotonsPerPass = 1u << 17;
+constexpr int kAccumulateBlockSize = 256;
 constexpr float kInitialRadiusFraction = 0.002f; // de la diagonale de la scène
 constexpr float kInitialRadiusPixels = 1.5f;     // caustiques vues depuis la caméra
 constexpr float kRadiusAlpha = 2.0f / 3.0f;
@@ -49,41 +49,57 @@ struct Accumulation {
    rt::Vec3* normal; // dans le repère de la caméra
 };
 
-// Ajoute un échantillon par pixel (l'échantillon numéro sample_index) aux tampons d'accumulation
+// Ajoute un échantillon par pixel (l'échantillon numéro sample_index) aux tampons d'accumulation.
+// Chaque thread prend un pixel libre, et en reprend un dès que son chemin est terminé : les threads
+// d'un warp restent occupés, au lieu d'attendre que le plus long chemin du warp se termine.
 __global__ void accumulate_kernel(
    rt::Camera camera,
    rt::SceneView view,
    Accumulation accumulation,
    std::uint32_t sample_index,
    unsigned long long* ray_counter,
+   std::uint32_t* next_pixel,
    int width,
    int height
 ) {
-   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
-   if (x >= width || y >= height) {
-      return;
-   }
-
-   const auto pixel_index = static_cast<std::uint32_t>((y * width) + x);
-   rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(pixel_index, sample_index);
-   const float jitter_x = rng.next_float();
-   const float jitter_y = rng.next_float();
-   const rt::Ray ray = camera.generate_ray(
-      static_cast<float>(x) + jitter_x,
-      static_cast<float>(y) + jitter_y
-   );
+   const auto pixel_count = static_cast<std::uint32_t>(width * height);
    std::uint32_t ray_count = 0;
+   std::uint32_t pixel = 0;
+   rt::Pcg32 rng(0, 0);
+   rt::PathState path;
    rt::FirstHit first_hit;
-   const rt::Vec3 radiance = rt::trace_path(ray, view, rng, ray_count, &first_hit);
-   const rt::Vec3 normal = camera.to_camera_space(first_hit.normal);
+   bool active = false;
 
-   const auto add = [&](rt::Vec3* buffer, rt::Vec3 value) {
-      buffer[pixel_index] = sample_index == 0 ? value : buffer[pixel_index] + value;
-   };
-   add(accumulation.color, radiance);
-   add(accumulation.albedo, first_hit.albedo);
-   add(accumulation.normal, normal);
+   while (true) {
+      if (!active) {
+         pixel = atomicAdd(next_pixel, 1u);
+         if (pixel >= pixel_count) {
+            break;
+         }
+         const std::uint32_t row = pixel / static_cast<std::uint32_t>(width);
+         const std::uint32_t column = pixel - (row * static_cast<std::uint32_t>(width));
+         const auto x = static_cast<float>(column);
+         const auto y = static_cast<float>(row);
+         rng = rt::Pcg32::make_pixel_rng(pixel, sample_index);
+         const float jitter_x = rng.next_float();
+         const float jitter_y = rng.next_float();
+         path = {.ray = camera.generate_ray(x + jitter_x, y + jitter_y)};
+         first_hit = {};
+         active = true;
+      }
+      if (rt::trace_bounce(path, view, rng, ray_count, &first_hit)) {
+         continue;
+      }
+
+      const rt::Vec3 normal = camera.to_camera_space(first_hit.normal);
+      const auto add = [&](rt::Vec3* buffer, rt::Vec3 value) {
+         buffer[pixel] = sample_index == 0 ? value : buffer[pixel] + value;
+      };
+      add(accumulation.color, path.radiance);
+      add(accumulation.albedo, first_hit.albedo);
+      add(accumulation.normal, normal);
+      active = false;
+   }
    atomicAdd(ray_counter, static_cast<unsigned long long>(ray_count));
 }
 
@@ -191,6 +207,18 @@ struct Renderer::Impl {
       texels.upload(scene.texels);
       photon_target_buffer = DeviceBuffer<rt::PhotonTarget>(photon_targets.size());
       photon_target_buffer.upload(photon_targets);
+      int blocks_per_sm = 0;
+      RT_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+         &blocks_per_sm,
+         accumulate_kernel,
+         kAccumulateBlockSize,
+         0
+      ));
+      int device = 0;
+      int sm_count = 0;
+      RT_CUDA_CHECK(cudaGetDevice(&device));
+      RT_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+      resident_blocks = blocks_per_sm * sm_count;
    }
 
    [[nodiscard]] rt::SceneView view() const {
@@ -241,6 +269,10 @@ struct Renderer::Impl {
    rt::DisplaySettings display;
    std::uint32_t sample_count = 0;
    DeviceBuffer<unsigned long long> ray_counter{1};
+   DeviceBuffer<std::uint32_t> next_pixel{1};
+   // Assez de blocs pour remplir le GPU, chacun traitant des pixels jusqu'à ce qu'il n'en reste
+   // plus
+   int resident_blocks = 0;
    GpuTimer timer;
    FrameStats last_frame;
    AccumulatedStats accumulated;
@@ -455,9 +487,8 @@ Renderer::DeviceInfo Renderer::device_info() {
 
 void Renderer::render(const rt::Camera& camera) {
    Impl& impl = *impl_;
-   const dim3 block(16, 16);
-   const dim3 grid((impl.width + 15) / 16, (impl.height + 15) / 16);
    RT_CUDA_CHECK(cudaMemset(impl.ray_counter.data(), 0, sizeof(unsigned long long)));
+   RT_CUDA_CHECK(cudaMemset(impl.next_pixel.data(), 0, sizeof(std::uint32_t)));
    rt::SceneView view = impl.view();
    if (impl.caustics) {
       if (impl.sample_count == 0) {
@@ -476,12 +507,13 @@ void Renderer::render(const rt::Camera& camera) {
    }
 
    impl.timer.start();
-   accumulate_kernel<<<grid, block>>>(
+   accumulate_kernel<<<impl.resident_blocks, kAccumulateBlockSize>>>(
       camera,
       view,
       impl.sums(),
       impl.sample_count,
       impl.ray_counter.data(),
+      impl.next_pixel.data(),
       impl.width,
       impl.height
    );
