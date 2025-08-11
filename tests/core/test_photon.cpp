@@ -211,6 +211,27 @@ TEST_CASE("photons : à travers une lame d'indice 1, l'éclairement est celui du
    );
 }
 
+TEST_CASE("photons : une lame dispersive d'indice 1 garde l'éclairement blanc", "[photon]") {
+   // Indice 1 à toutes les longueurs d'onde : seule la couleur tirée change, en moyenne blanche
+   TestScene t = make_scene(spot({0, 0, 2}, {0, 0, -1}), true, false);
+   t.scene.materials[kGlassMaterial].dispersion = 1.0f;
+   const rt::SceneView view = t.view();
+   rt::Pcg32 rng(7, 0);
+   rt::Vec3 flux{0.0f, 0.0f, 0.0f};
+   constexpr int kCount = 400'000;
+   for (int i = 0; i < kCount; ++i) {
+      rt::Photon photon;
+      if (rt::trace_photon(view, rt::emit_photon(view, rng), rng, photon) &&
+          rt::length(photon.position) < 0.1f) {
+         flux += photon.power;
+      }
+   }
+   const rt::Vec3 irradiance = flux / (static_cast<float>(kCount) * rt::kPi * 0.01f);
+   CHECK_THAT(irradiance.x, WithinRel(100.0f / 4.0f, 0.04f));
+   CHECK_THAT(irradiance.y, WithinRel(100.0f / 4.0f, 0.04f));
+   CHECK_THAT(irradiance.z, WithinRel(100.0f / 4.0f, 0.04f));
+}
+
 TEST_CASE("photons : l'émission dirigée vers une petite lame garde l'éclairement", "[photon]") {
    // Lampe ponctuelle à 3 m au-dessus d'une lame de 60 cm : E = I / 3² sous la lame
    TestScene t = make_scene({.position = {0, 0, 3}, .intensity = {100, 100, 100}}, false, false);

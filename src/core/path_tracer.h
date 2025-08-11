@@ -11,6 +11,7 @@
 #include "core/rng.h"
 #include "core/sampling.h"
 #include "core/scene_view.h"
+#include "core/spectrum.h"
 #include "core/texture.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
@@ -266,6 +267,8 @@ RT_HOST_DEVICE inline Vec3 surface_albedo(
 
 // Réflexion ou réfraction sur une surface diélectrique lisse. Met à jour throughput (absorption
 // du volume traversé, couleur transmise) et renvoie le rayon suivant.
+// Verre dispersif : au premier passage, le chemin tire une longueur d'onde (wavelength, 0 tant
+// qu'aucune n'est choisie) et prend sa couleur ; l'indice dépend ensuite de cette longueur d'onde.
 RT_HOST_DEVICE inline Ray scatter_glass(
    SceneView view,
    const Hit& hit,
@@ -273,16 +276,24 @@ RT_HOST_DEVICE inline Ray scatter_glass(
    Vec3 albedo,
    const Ray& ray,
    Pcg32& rng,
-   Vec3& throughput
+   Vec3& throughput,
+   float& wavelength
 ) {
+   float ior = material.ior;
+   if (material.dispersion > 0.0f) {
+      if (wavelength == 0.0f) {
+         wavelength = sample_wavelength(rng.next_float());
+         throughput = throughput * wavelength_rgb(wavelength);
+      }
+      ior = dispersive_ior(material.ior, material.dispersion, wavelength);
+   }
    const Vec3 outward = geometric_normal(view, hit.triangle);
    if (dot(ray.direction, outward) > 0.0f) {
       // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
       throughput = throughput * beer_lambert(material.absorption, hit.t);
    }
    const Vec3 outward_shading = shading_normal(view, hit, outward);
-   const DielectricSample
-      sample = sample_dielectric(ray.direction, outward_shading, material.ior, rng);
+   const DielectricSample sample = sample_dielectric(ray.direction, outward_shading, ior, rng);
    if (sample.transmitted) {
       throughput = throughput * albedo;
    }
@@ -372,6 +383,7 @@ struct PathState {
    // par les photons.
    bool after_diffuse = false;
    bool caustic_path = false;
+   float wavelength = 0.0f; // nm, 0 : pas encore choisie
 };
 
 // Avance le chemin d'un rebond. Renvoie false quand il est terminé : path.radiance est alors la
@@ -417,7 +429,16 @@ RT_HOST_DEVICE inline bool trace_bounce(
 
    if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
       // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
-      path.ray = scatter_glass(view, hit, material, albedo, path.ray, rng, path.throughput);
+      path.ray = scatter_glass(
+         view,
+         hit,
+         material,
+         albedo,
+         path.ray,
+         rng,
+         path.throughput,
+         path.wavelength
+      );
       path.specular_bounce = true;
       path.caustic_path = path.after_diffuse;
    } else {

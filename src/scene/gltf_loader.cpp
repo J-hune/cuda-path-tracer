@@ -67,6 +67,7 @@ std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::pa
                                 fastgltf::Extensions::KHR_materials_transmission |
                                 fastgltf::Extensions::KHR_materials_ior |
                                 fastgltf::Extensions::KHR_materials_volume |
+                                fastgltf::Extensions::KHR_materials_dispersion |
                                 fastgltf::Extensions::KHR_lights_punctual;
    fastgltf::Parser parser(kExtensions);
    auto asset = parser.loadGltf(
@@ -131,6 +132,7 @@ std::expected<std::vector<Material>, std::string> load_materials(const fastgltf:
          .transmission = transmission,
          .ior = material.ior,
          .absorption = absorption,
+         .dispersion = static_cast<float>(material.dispersion),
       });
    }
    materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});

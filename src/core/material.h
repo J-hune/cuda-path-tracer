@@ -20,6 +20,8 @@ struct Material {
    float ior = 1.5f;
    // Coefficient d'absorption du volume par unité de distance (Beer-Lambert)
    Vec3 absorption{0.0f, 0.0f, 0.0f};
+   // 20 / nombre d'Abbe, 0 : indice indépendant de la longueur d'onde
+   float dispersion = 0.0f;
 };
 
 } // namespace rt

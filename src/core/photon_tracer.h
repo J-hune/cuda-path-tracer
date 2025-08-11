@@ -184,6 +184,7 @@ RT_HOST_DEVICE inline bool trace_photon(
 ) {
    Ray ray = emitted.ray;
    Vec3 throughput{1.0f, 1.0f, 1.0f};
+   float wavelength = 0.0f;
    for (int bounce = 0; bounce < kMaxBounces; ++bounce) {
       Hit hit{};
       if (!intersect_scene(ray, view, hit)) {
@@ -193,7 +194,7 @@ RT_HOST_DEVICE inline bool trace_photon(
       const Vec3 albedo = surface_albedo(view, material, hit);
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
-         ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput);
+         ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput, wavelength);
       } else if (is_glossy_metal(material)) {
          const ShadingPoint shading = make_shading_point(view, hit, material, albedo, ray);
          const BsdfSample bsdf = principled::sample(
