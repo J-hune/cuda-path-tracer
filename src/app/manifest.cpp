@@ -91,6 +91,8 @@ bool write_manifest(const std::string& path, const RenderManifest& m) {
    file << "  \"settings\": {\n";
    file << std::format("    \"mis\": {},\n", m.mis);
    file << std::format("    \"firefly_clamp\": {},\n", m.firefly_clamp);
+   file << std::format("    \"aperture_radius\": {},\n", m.aperture_radius);
+   file << std::format("    \"focus_distance\": {},\n", m.focus_distance);
    file << std::format("    \"caustics\": {},\n", json_string(m.caustics));
    file << std::format("    \"denoiser\": {},\n", json_string(m.denoiser));
    file << std::format("    \"max_bounces\": {},\n", m.max_bounces);

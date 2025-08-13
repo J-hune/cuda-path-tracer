@@ -17,11 +17,13 @@
 #include <fastgltf/types.hpp>
 #include <filesystem>
 #include <numbers>
+#include <simdjson.h>
 #include <span>
 #include <stb_image.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -51,7 +53,38 @@ std::string describe(fastgltf::Error error) {
    return std::string(fastgltf::getErrorMessage(error));
 }
 
-std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::path& path) {
+// Profondeur de champ des caméras, que glTF ne décrit pas : propriétés personnalisées (extras)
+// raytracer_aperture (rayon de la lentille) et raytracer_focus_distance
+struct CameraLens {
+   float aperture_radius = 0.0f;
+   float focus_distance = 1.0f;
+};
+using CameraLenses = std::unordered_map<std::size_t, CameraLens>;
+
+void parse_camera_extras(
+   simdjson::dom::object* extras,
+   std::size_t index,
+   fastgltf::Category category,
+   void* user_pointer
+) {
+   if (category != fastgltf::Category::Cameras) {
+      return;
+   }
+   CameraLens lens;
+   double value = 0.0;
+   if ((*extras)["raytracer_aperture"].get_double().get(value) == simdjson::SUCCESS) {
+      lens.aperture_radius = static_cast<float>(value);
+   }
+   if ((*extras)["raytracer_focus_distance"].get_double().get(value) == simdjson::SUCCESS) {
+      lens.focus_distance = static_cast<float>(value);
+   }
+   (*static_cast<CameraLenses*>(user_pointer))[index] = lens;
+}
+
+std::expected<fastgltf::Asset, std::string> parse_file(
+   const std::filesystem::path& path,
+   CameraLenses& lenses
+) {
    if (!std::filesystem::exists(path)) {
       return std::unexpected("GLTF file not found: " + path.string());
    }
@@ -70,6 +103,8 @@ std::expected<fastgltf::Asset, std::string> parse_file(const std::filesystem::pa
                                 fastgltf::Extensions::KHR_materials_dispersion |
                                 fastgltf::Extensions::KHR_lights_punctual;
    fastgltf::Parser parser(kExtensions);
+   parser.setUserPointer(&lenses);
+   parser.setExtrasParseCallback(parse_camera_extras);
    auto asset = parser.loadGltf(
       data.get(),
       path.parent_path(),
@@ -217,7 +252,8 @@ std::expected<void, std::string> load_textures(const fastgltf::Asset& asset, Sce
 // Caméra glTF : regarde vers -z dans son repère local, haut selon +y
 std::expected<CameraSettings, std::string> load_camera(
    const fastgltf::Camera& camera,
-   const Matrix& matrix
+   const Matrix& matrix,
+   CameraLens lens
 ) {
    const auto* perspective = std::get_if<fastgltf::Camera::Perspective>(&camera.camera);
    if (perspective == nullptr) {
@@ -230,6 +266,8 @@ std::expected<CameraSettings, std::string> load_camera(
       .target = transform(matrix, 0.f, 0.f, -1.f, 1.f),
       .up = transform(matrix, 0.f, 1.f, 0.f, 0.f),
       .vertical_fov_degrees = perspective->yfov * 180.f / std::numbers::pi_v<float>,
+      .aperture_radius = lens.aperture_radius,
+      .focus_distance = lens.focus_distance,
    };
 }
 
@@ -382,7 +420,8 @@ std::expected<void, std::string> load_primitive(
 } // namespace
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
-   auto parsed = parse_file(path);
+   CameraLenses lenses;
+   auto parsed = parse_file(path, lenses);
    if (!parsed) {
       return std::unexpected(parsed.error());
    }
@@ -412,7 +451,12 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
 
          // Seule la première caméra de la scène est utilisée
          if (node.cameraIndex.has_value() && !scene.camera.has_value()) {
-            auto camera = load_camera(asset.cameras[*node.cameraIndex], matrix);
+            const auto lens = lenses.find(*node.cameraIndex);
+            auto camera = load_camera(
+               asset.cameras[*node.cameraIndex],
+               matrix,
+               lens != lenses.end() ? lens->second : CameraLens{}
+            );
             if (!camera) {
                error = camera.error();
                return;

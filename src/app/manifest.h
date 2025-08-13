@@ -19,7 +19,9 @@ struct RenderManifest {
    std::uint64_t rays = 0;
 
    bool mis = true;
-   float firefly_clamp = 0.0f; // 0 : désactivé
+   float firefly_clamp = 0.0f;   // 0 : désactivé
+   float aperture_radius = 0.0f; // 0 : sans profondeur de champ
+   float focus_distance = 0.0f;
    std::string caustics;
    std::string denoiser;
    int max_bounces = 0;

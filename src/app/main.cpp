@@ -5,11 +5,14 @@
 #include "core/aabb.h"
 #include "core/camera.h"
 #include "core/path_tracer.h"
+#include "core/ray.h"
+#include "core/scene_view.h"
 #include "core/tonemap.h"
 #include "core/vec3.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
+#include "scene/host_view.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -85,7 +88,8 @@ std::string export_render(
    Renderer& renderer,
    const Renderer::DeviceInfo& device,
    const std::string& scene_path,
-   Size size
+   Size size,
+   const rt::CameraSettings& camera
 ) {
    const std::string base = std::format("render_{}spp", renderer.sample_count());
    const Renderer::AccumulatedStats accumulated = renderer.accumulated();
@@ -100,6 +104,8 @@ std::string export_render(
       .rays = accumulated.rays,
       .mis = renderer.mis(),
       .firefly_clamp = renderer.firefly_clamp(),
+      .aperture_radius = camera.aperture_radius,
+      .focus_distance = camera.focus_distance,
       .caustics = caustic_description(renderer),
       .denoiser = renderer.denoiser() ? "OptiX (albédo et normales)" : "aucun",
       .max_bounces = rt::kMaxBounces,
@@ -127,7 +133,58 @@ std::string export_render(
    return ok ? std::format("Exporté : {}", base) : std::format("Échec de l'export de {}", base);
 }
 
-void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
+// Réglages de la lentille. Renvoie vrai s'ils ont changé.
+bool draw_lens_settings(FlyCamera& fly_camera) {
+   const rt::CameraSettings settings = fly_camera.settings();
+   float aperture = settings.aperture_radius;
+   float focus = settings.focus_distance;
+   ImGui::SeparatorText("Caméra");
+   bool changed = ImGui::SliderFloat(
+      "Aperture",
+      &aperture,
+      0.0f,
+      1.0f,
+      "%.3f",
+      ImGuiSliderFlags_Logarithmic
+   );
+   changed |= ImGui::SliderFloat(
+      "Focus",
+      &focus,
+      0.1f,
+      100.0f,
+      "%.2f",
+      ImGuiSliderFlags_Logarithmic
+   );
+   ImGui::TextUnformatted("Clic gauche : focus sur l'objet");
+   if (changed) {
+      fly_camera.set_lens(aperture, focus);
+   }
+   return changed;
+}
+
+// Mise au point sur l'objet sous le curseur : distance du point touché le long de l'axe de visée
+void focus_on_cursor(
+   FlyCamera& fly_camera,
+   const rt::Camera& camera,
+   const rt::SceneView& scene,
+   CursorPosition cursor
+) {
+   const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+   const rt::Ray ray = camera.generate_ray(
+      static_cast<float>(cursor.x) * scale.x,
+      static_cast<float>(cursor.y) * scale.y
+   );
+   rt::Hit hit{};
+   if (!rt::intersect_scene(ray, scene, hit)) {
+      return;
+   }
+   const rt::CameraSettings settings = fly_camera.settings();
+   const rt::Vec3 forward = rt::normalize(settings.target - settings.position);
+   fly_camera.set_lens(settings.aperture_radius, hit.t * rt::dot(ray.direction, forward));
+}
+
+// Panneau de l'interface. Renvoie vrai si les réglages de la lentille ont changé.
+bool draw_panel(Renderer& renderer, Controls& controls, FlyCamera& fly_camera, Size image_size) {
    ImGui::SetNextWindowPos({10.0f, 10.0f}, ImGuiCond_FirstUseEver);
    ImGui::Begin("Rendu", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
@@ -174,6 +231,8 @@ void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
       renderer.set_display_layer(static_cast<Renderer::DisplayLayer>(layer));
    }
 
+   const bool lens_changed = draw_lens_settings(fly_camera);
+
    ImGui::SeparatorText("Affichage");
    rt::DisplaySettings display = renderer.display();
    int tone_mapping = static_cast<int>(display.tone_mapping);
@@ -207,6 +266,7 @@ void draw_panel(Renderer& renderer, Controls& controls, Size image_size) {
       "Échap : quitter"
    );
    ImGui::End();
+   return lens_changed;
 }
 
 // Raccourcis selon la lettre imprimée sur la touche : ImGui traduit les touches GLFW selon la
@@ -276,6 +336,7 @@ int main(int argc, char** argv) {
    const std::string scene_path = argv[1];
    renderer.attach_pixel_buffer(window->pixel_buffer());
 
+   const rt::SceneView host_scene = rt::host_view(*scene, bvh);
    FlyCamera fly_camera(scene->camera.value_or(rt::CameraSettings{}));
    rt::Camera camera(fly_camera.settings(), kWidth, kHeight);
    // Vitesse de déplacement proportionnelle à la taille de la scène
@@ -308,10 +369,20 @@ int main(int argc, char** argv) {
       const auto delta_time = static_cast<float>(now - last_time);
       last_time = now;
 
-      draw_panel(renderer, controls, window->image_size());
+      bool lens_changed = draw_panel(renderer, controls, fly_camera, window->image_size());
       handle_shortcuts(*window, renderer, controls);
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
+         focus_on_cursor(fly_camera, camera, host_scene, window->cursor_position());
+         lens_changed = true;
+      }
       if (controls.export_requested) {
-         controls.status = export_render(renderer, device, scene_path, window->image_size());
+         controls.status = export_render(
+            renderer,
+            device,
+            scene_path,
+            window->image_size(),
+            fly_camera.settings()
+         );
          controls.export_requested = false;
       }
 
@@ -333,7 +404,7 @@ int main(int argc, char** argv) {
       }
       last_cursor = cursor;
 
-      if (moved) {
+      if (moved || lens_changed) {
          camera = rt::Camera(fly_camera.settings(), size.width, size.height);
          renderer.reset();
       }

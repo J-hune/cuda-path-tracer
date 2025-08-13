@@ -17,7 +17,9 @@ constexpr rt::Vec3 kWorldUp{0.0f, 1.0f, 0.0f};
 // Lacet nul : la caméra regarde vers -z. Lacet positif : elle tourne vers +x
 FlyCamera::FlyCamera(const rt::CameraSettings& initial):
    position_(initial.position),
-   vertical_fov_degrees_(initial.vertical_fov_degrees) {
+   vertical_fov_degrees_(initial.vertical_fov_degrees),
+   aperture_radius_(initial.aperture_radius),
+   focus_distance_(initial.focus_distance) {
    const rt::Vec3 direction = rt::normalize(initial.target - initial.position);
    yaw_ = std::atan2(direction.x, -direction.z);
    pitch_ = std::asin(std::clamp(direction.y, -1.0f, 1.0f));
@@ -44,5 +46,12 @@ rt::CameraSettings FlyCamera::settings() const {
       .target = position_ + forward(),
       .up = kWorldUp,
       .vertical_fov_degrees = vertical_fov_degrees_,
+      .aperture_radius = aperture_radius_,
+      .focus_distance = focus_distance_,
    };
+}
+
+void FlyCamera::set_lens(float aperture_radius, float focus_distance) {
+   aperture_radius_ = aperture_radius;
+   focus_distance_ = focus_distance;
 }

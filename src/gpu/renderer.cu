@@ -83,7 +83,11 @@ __global__ void accumulate_kernel(
          rng = rt::Pcg32::make_pixel_rng(pixel, sample_index);
          const float jitter_x = rng.next_float();
          const float jitter_y = rng.next_float();
-         path = {.ray = camera.generate_ray(x + jitter_x, y + jitter_y)};
+         rt::Vec2 lens{0.5f, 0.5f};
+         if (camera.has_aperture()) {
+            lens = {rng.next_float(), rng.next_float()};
+         }
+         path = {.ray = camera.generate_ray(x + jitter_x, y + jitter_y, lens)};
          first_hit = {};
          active = true;
       }

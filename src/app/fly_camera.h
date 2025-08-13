@@ -17,6 +17,9 @@ public:
 
    [[nodiscard]] rt::CameraSettings settings() const;
 
+   // Profondeur de champ : rayon de la lentille (0 : tout est net) et distance de mise au point
+   void set_lens(float aperture_radius, float focus_distance);
+
 private:
    [[nodiscard]] rt::Vec3 forward() const;
 
@@ -24,4 +27,6 @@ private:
    float yaw_ = 0.0f;
    float pitch_ = 0.0f;
    float vertical_fov_degrees_;
+   float aperture_radius_;
+   float focus_distance_;
 };
