@@ -144,6 +144,49 @@ RT_HOST_DEVICE inline Vec3 shading_normal(SceneView view, const Hit& hit, Vec3 g
    return dot(shading, geometric) < 0.0f ? -shading : shading;
 }
 
+// Normale d'ombrage perturbée par la texture de normales du matériau, au point de coordonnées de
+// texture uv, du même côté que la normale géométrique donnée. Sans texture ou sans tangentes : la
+// normale interpolée.
+RT_HOST_DEVICE inline Vec3 mapped_normal(
+   SceneView view,
+   const Hit& hit,
+   const Material& material,
+   Vec2 uv,
+   Vec3 geometric
+) {
+   if (material.normal_texture < 0 || view.tangents == nullptr || view.normals == nullptr) {
+      return shading_normal(view, hit, geometric);
+   }
+   const std::uint32_t i0 = view.indices[(3 * hit.triangle) + 0];
+   const std::uint32_t i1 = view.indices[(3 * hit.triangle) + 1];
+   const std::uint32_t i2 = view.indices[(3 * hit.triangle) + 2];
+   const float w0 = 1.0f - hit.u - hit.v;
+   const Vec3 n = (w0 * view.normals[i0]) + (hit.u * view.normals[i1]) + (hit.v * view.normals[i2]);
+   const Vec3 t = (w0 * view.tangents[i0].direction) + (hit.u * view.tangents[i1].direction) +
+                  (hit.v * view.tangents[i2].direction);
+   if (length_squared(n) < 1e-12f) {
+      return geometric;
+   }
+   const Vec3 normal = normalize(n);
+   // Repère tangent orthonormé autour de la normale interpolée
+   const Vec3 tangent = t - (normal * dot(normal, t));
+   if (length_squared(tangent) < 1e-12f) {
+      return shading_normal(view, hit, geometric);
+   }
+   const Vec3 tx = normalize(tangent);
+   const Vec3 bx = cross(normal, tx) * view.tangents[i0].sign;
+
+   const Texture texture = view.textures[material.normal_texture];
+   const Vec3 c = (sample_texture(texture, view.texels, uv) * 2.0f) - Vec3{1.0f, 1.0f, 1.0f};
+   const Vec3 mapped = (tx * (c.x * material.normal_scale)) + (bx * (c.y * material.normal_scale)) +
+                       (normal * c.z);
+   if (length_squared(mapped) < 1e-12f) {
+      return shading_normal(view, hit, geometric);
+   }
+   const Vec3 result = normalize(mapped);
+   return dot(result, geometric) < 0.0f ? -result : result;
+}
+
 // Terminateur d'ombre (Chiang et al., « Taming the Shadow Terminator », 2019) : atténue la lumière
 // que la normale d'ombrage promet là où la géométrie réelle la reçoit en rasant
 RT_HOST_DEVICE inline float shadow_terminator(Vec3 geometric, Vec3 shading, Vec3 wi) {
@@ -164,7 +207,7 @@ RT_HOST_DEVICE inline float shadow_terminator(Vec3 geometric, Vec3 shading, Vec3
 RT_HOST_DEVICE inline Vec2 triangle_uv(SceneView view, std::uint32_t triangle, float u, float v) {
    const Material& material = view.materials[view.material_indices[triangle]];
    if (material.base_color_texture < 0 && material.metallic_roughness_texture < 0 &&
-       material.emissive_texture < 0) {
+       material.emissive_texture < 0 && material.normal_texture < 0) {
       return {0.0f, 0.0f};
    }
    const Vec2 uv0 = view.uvs[view.indices[(3 * triangle) + 0]];
@@ -374,12 +417,14 @@ RT_HOST_DEVICE inline Ray scatter_glass(
 RT_HOST_DEVICE inline ShadingPoint make_shading_point(
    SceneView view,
    const Hit& hit,
+   const Material& material,
    const SurfaceParams& params,
+   Vec2 uv,
    const Ray& ray
 ) {
    const Vec3 n_g = facing_normal(view, hit.triangle, ray.direction);
    // Normale d'ombrage, sauf si l'observateur se retrouve derrière elle
-   const Vec3 n_s = shading_normal(view, hit, n_g);
+   const Vec3 n_s = mapped_normal(view, hit, material, uv, n_g);
    const Vec3 n = dot(n_s, -ray.direction) > 0.0f ? n_s : n_g;
    const Frame frame = make_frame(n);
    return {
@@ -496,7 +541,7 @@ RT_HOST_DEVICE inline bool trace_bounce(
    const Vec3 albedo = params.base_color;
    if (path.bounce == 0 && first_hit != nullptr) {
       const Vec3 facing = facing_normal(view, hit.triangle, path.ray.direction);
-      *first_hit = {.albedo = albedo, .normal = shading_normal(view, hit, facing)};
+      *first_hit = {.albedo = albedo, .normal = mapped_normal(view, hit, material, uv, facing)};
    }
 
    if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
@@ -515,7 +560,7 @@ RT_HOST_DEVICE inline bool trace_bounce(
       path.caustic_path = path.after_diffuse;
    } else {
       // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
-      const ShadingPoint shading = make_shading_point(view, hit, params, path.ray);
+      const ShadingPoint shading = make_shading_point(view, hit, material, params, uv, path.ray);
       const Vec3 n_g = shading.geometric_normal;
       const Vec3 n = shading.frame.normal;
       const bool glossy = photons && is_glossy_metal(material);

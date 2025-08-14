@@ -192,17 +192,14 @@ RT_HOST_DEVICE inline bool trace_photon(
          return false;
       }
       const Material material = view.materials[view.material_indices[hit.triangle]];
-      const SurfaceParams params = surface_params(
-         view,
-         material,
-         triangle_uv(view, hit.triangle, hit.u, hit.v)
-      );
+      const Vec2 uv = triangle_uv(view, hit.triangle, hit.u, hit.v);
+      const SurfaceParams params = surface_params(view, material, uv);
       const Vec3 albedo = params.base_color;
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
          ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput, wavelength);
       } else if (is_glossy_metal(material)) {
-         const ShadingPoint shading = make_shading_point(view, hit, params, ray);
+         const ShadingPoint shading = make_shading_point(view, hit, material, params, uv, ray);
          const BsdfSample bsdf = principled::sample(
             shading.params,
             shading.wo,

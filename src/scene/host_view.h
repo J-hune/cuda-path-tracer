@@ -24,6 +24,7 @@ inline SceneView host_view(const Scene& scene, const Bvh& bvh) {
    view.punctual_light_count = static_cast<std::uint32_t>(scene.punctual_lights.size());
    view.uvs = scene.uvs.data();
    view.normals = scene.normals.empty() ? nullptr : scene.normals.data();
+   view.tangents = scene.tangents.empty() ? nullptr : scene.tangents.data();
    view.textures = scene.textures.data();
    view.texels = scene.texels.data();
    view.environment = scene.environment;

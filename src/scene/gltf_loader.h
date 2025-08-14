@@ -4,6 +4,7 @@
 #include "core/environment.h"
 #include "core/light.h"
 #include "core/material.h"
+#include "core/tangent.h"
 #include "core/texture.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
@@ -20,6 +21,7 @@ struct Scene {
    std::vector<Vec3> positions;
    std::vector<Vec2> uvs;
    std::vector<Vec3> normals; // par sommet ; nulle : ombrage plat
+   std::vector<Tangent> tangents;
    std::vector<std::uint32_t> indices;
    std::optional<CameraSettings> camera;
    std::vector<Material> materials;

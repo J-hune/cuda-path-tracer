@@ -7,6 +7,7 @@
 #include "core/photon_map.h"
 #include "core/rng.h"
 #include "core/scene_view.h"
+#include "core/tangent.h"
 #include "core/texture.h"
 #include "core/tonemap.h"
 #include "core/vec2.h"
@@ -185,6 +186,7 @@ struct Renderer::Impl {
       punctual_lights(scene.punctual_lights.size()),
       uvs(scene.uvs.size()),
       normals(scene.normals.size()),
+      tangents(scene.tangents.size()),
       textures(scene.textures.size()),
       texels(scene.texels.size()),
       accumulation(static_cast<std::size_t>(width) * height),
@@ -208,6 +210,7 @@ struct Renderer::Impl {
       punctual_lights.upload(scene.punctual_lights);
       uvs.upload(scene.uvs);
       normals.upload(scene.normals);
+      tangents.upload(scene.tangents);
       textures.upload(scene.textures);
       texels.upload(scene.texels);
       photon_target_buffer = DeviceBuffer<rt::PhotonTarget>(photon_targets.size());
@@ -248,6 +251,7 @@ struct Renderer::Impl {
          .triangle_light = triangle_light.size() == 0 ? nullptr : triangle_light.data(),
          .uvs = uvs.data(),
          .normals = normals.size() == 0 ? nullptr : normals.data(),
+         .tangents = tangents.size() == 0 ? nullptr : tangents.data(),
          .textures = textures.data(),
          .texels = texels.data(),
          .environment = environment,
@@ -272,6 +276,7 @@ struct Renderer::Impl {
    DeviceBuffer<rt::PunctualLight> punctual_lights;
    DeviceBuffer<rt::Vec2> uvs;
    DeviceBuffer<rt::Vec3> normals;
+   DeviceBuffer<rt::Tangent> tangents;
    DeviceBuffer<rt::Texture> textures;
    DeviceBuffer<rt::Vec3> texels;
    DeviceBuffer<rt::Vec3> accumulation;

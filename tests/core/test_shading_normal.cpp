@@ -1,5 +1,8 @@
+#include "core/material.h"
 #include "core/path_tracer.h"
 #include "core/scene_view.h"
+#include "core/tangent.h"
+#include "core/texture.h"
 #include "core/vec3.h"
 
 #include <array>
@@ -116,4 +119,41 @@ TEST_CASE(
    CHECK(overhead <= 1.0f);
    // Lumière sous la normale d'ombrage : rien
    CHECK(rt::shadow_terminator(kGeometric, tilted, rt::normalize({-1.0f, 0.0f, 0.1f})) == 0.0f);
+}
+
+TEST_CASE(
+   "normal mapping : texture neutre, inclinaison vers la tangente, intensité",
+   "[shading_normal]"
+) {
+   const std::array<rt::Vec3, 3> normals{rt::Vec3{0, 0, 1}, rt::Vec3{0, 0, 1}, rt::Vec3{0, 0, 1}};
+   const std::array<rt::Tangent, 3> tangents{
+      rt::Tangent{.direction = {1, 0, 0}, .sign = 1.0f},
+      rt::Tangent{.direction = {1, 0, 0}, .sign = 1.0f},
+      rt::Tangent{.direction = {1, 0, 0}, .sign = 1.0f},
+   };
+   // Texture 2 × 1 : texel neutre (0,5 ; 0,5 ; 1), puis incliné à 45° vers la tangente
+   const std::array<rt::Texture, 1> textures{rt::Texture{.offset = 0, .width = 2, .height = 1}};
+   const float tilt = 0.5f + (0.5f * std::sqrt(0.5f));
+   const std::array<rt::Vec3, 2> texels{rt::Vec3{0.5f, 0.5f, 1.0f}, rt::Vec3{tilt, 0.5f, tilt}};
+   rt::SceneView view = view_with(normals);
+   view.tangents = tangents.data();
+   view.textures = textures.data();
+   view.texels = texels.data();
+   const rt::Hit hit{.t = 1, .triangle = 0, .u = 0.2f, .v = 0.3f};
+   rt::Material material{.albedo = {1, 1, 1}, .emission = {0, 0, 0}, .normal_texture = 0};
+
+   check_vec(rt::mapped_normal(view, hit, material, {0.25f, 0.5f}, kGeometric), {0, 0, 1});
+   check_vec(
+      rt::mapped_normal(view, hit, material, {0.75f, 0.5f}, kGeometric),
+      rt::normalize({1, 0, 1})
+   );
+   // Intensité nulle : seule la composante normale reste
+   material.normal_scale = 0.0f;
+   check_vec(rt::mapped_normal(view, hit, material, {0.75f, 0.5f}, kGeometric), {0, 0, 1});
+   // Vue de l'autre côté : la normale perturbée est retournée avec la surface
+   material.normal_scale = 1.0f;
+   check_vec(
+      rt::mapped_normal(view, hit, material, {0.75f, 0.5f}, -kGeometric),
+      rt::normalize({-1, 0, -1})
+   );
 }

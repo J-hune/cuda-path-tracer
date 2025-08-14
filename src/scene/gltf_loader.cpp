@@ -6,6 +6,7 @@
 #include "core/material.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
+#include "scene/tangents.h"
 
 #include <cmath>
 #include <cstddef>
@@ -269,8 +270,9 @@ std::expected<std::vector<Material>, std::string> load_materials(
          material.name
       );
       const auto emissive_texture = textures.get(material.emissiveTexture, true, material.name);
+      const auto normal_texture = textures.get(material.normalTexture, false, material.name);
       for (const auto* texture :
-           {&base_color_texture, &metallic_roughness_texture, &emissive_texture}) {
+           {&base_color_texture, &metallic_roughness_texture, &emissive_texture, &normal_texture}) {
          if (!*texture) {
             return std::unexpected(texture->error());
          }
@@ -300,6 +302,10 @@ std::expected<std::vector<Material>, std::string> load_materials(
          .base_color_texture = *base_color_texture,
          .metallic_roughness_texture = *metallic_roughness_texture,
          .emissive_texture = *emissive_texture,
+         .normal_texture = *normal_texture,
+         .normal_scale = material.normalTexture.has_value()
+                            ? static_cast<float>(material.normalTexture->scale)
+                            : 1.0f,
          .metallic = static_cast<float>(material.pbrData.metallicFactor),
          .roughness = static_cast<float>(material.pbrData.roughnessFactor),
          .transmission = transmission,
@@ -381,6 +387,7 @@ PunctualLight load_light(const fastgltf::Light& light, const Matrix& matrix) {
 }
 
 // Ajoute les sommets (en coordonnées monde), les UV, les indices et les matériaux d'une primitive
+
 std::expected<void, std::string> load_primitive(
    const fastgltf::Asset& asset,
    const fastgltf::Primitive& primitive,
@@ -416,6 +423,14 @@ std::expected<void, std::string> load_primitive(
    }
    if (*normals != nullptr && (*normals)->count != vertex_count) {
       return std::unexpected("NORMAL and POSITION have different counts");
+   }
+
+   const auto tangents = find_attribute(asset, primitive, "TANGENT");
+   if (!tangents) {
+      return std::unexpected(tangents.error());
+   }
+   if (*tangents != nullptr && (*tangents)->count != vertex_count) {
+      return std::unexpected("TANGENT and POSITION have different counts");
    }
 
    const fastgltf::Accessor* indices = nullptr;
@@ -471,6 +486,28 @@ std::expected<void, std::string> load_primitive(
       for (std::size_t i = 0; i < vertex_count; ++i) {
          scene.indices.push_back(base + static_cast<std::uint32_t>(i));
       }
+   }
+
+   // Tangentes : celles du fichier, transformées comme des directions de la surface (une symétrie
+   // inverse le sens de la bitangente), sinon calculées à partir des coordonnées de texture
+   if (*tangents != nullptr) {
+      const Vec3 c0 = transform(matrix, 1.f, 0.f, 0.f, 0.f);
+      const Vec3 c1 = transform(matrix, 0.f, 1.f, 0.f, 0.f);
+      const Vec3 c2 = transform(matrix, 0.f, 0.f, 1.f, 0.f);
+      const float handedness = dot(c0, cross(c1, c2)) < 0.0f ? -1.0f : 1.0f;
+      fastgltf::iterateAccessor<fastgltf::math::fvec4>(
+         asset,
+         **tangents,
+         [&](fastgltf::math::fvec4 t) {
+            const Vec3 direction = transform(matrix, t.x(), t.y(), t.z(), 0.f);
+            scene.tangents.push_back({
+               .direction = length_squared(direction) > 0.0f ? normalize(direction) : direction,
+               .sign = (t.w() < 0.0f ? -1.0f : 1.0f) * handedness,
+            });
+         }
+      );
+   } else {
+      compute_tangents(scene, base, static_cast<std::uint32_t>(vertex_count), index_count);
    }
 
    const std::uint32_t material_index = primitive.materialIndex.has_value()

@@ -15,6 +15,9 @@ struct Material {
    std::int32_t base_color_texture = -1;
    std::int32_t metallic_roughness_texture = -1;
    std::int32_t emissive_texture = -1;
+   // Texture de normales (espace tangent) et son intensité (scale de glTF)
+   std::int32_t normal_texture = -1;
+   float normal_scale = 1.0f;
    // Modèle metallic-roughness de glTF (diélectrique mat par défaut)
    float metallic = 0.0f;
    float roughness = 1.0f;

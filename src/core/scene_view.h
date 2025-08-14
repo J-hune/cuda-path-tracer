@@ -8,6 +8,7 @@
 #include "core/material.h"
 #include "core/photon_map.h"
 #include "core/ray.h"
+#include "core/tangent.h"
 #include "core/texture.h"
 #include "core/triangle.h"
 #include "core/vec2.h"
@@ -35,7 +36,8 @@ struct SceneView {
    const float* light_cdf = nullptr;
    const std::int32_t* triangle_light = nullptr;
    const Vec2* uvs = nullptr;
-   const Vec3* normals = nullptr; // par sommet, nullptr : normales géométriques
+   const Vec3* normals = nullptr;     // par sommet, nullptr : normales géométriques
+   const Tangent* tangents = nullptr; // par sommet, nullptr : pas de normal mapping
    const Texture* textures = nullptr;
    const Vec3* texels = nullptr;
    Environment environment;
