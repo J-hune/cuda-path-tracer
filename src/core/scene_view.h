@@ -29,6 +29,11 @@ struct SceneView {
    std::uint32_t emissive_triangle_count = 0;
    const PunctualLight* punctual_lights = nullptr;
    std::uint32_t punctual_light_count = 0;
+   // Choix des lumières selon leur puissance : fonction de répartition (nombre de lumières + 1
+   // entrées, de 0 à 1) et index de lumière de chaque triangle (-1 s'il n'est pas tiré).
+   // nullptr : choix uniforme parmi toutes les lumières.
+   const float* light_cdf = nullptr;
+   const std::int32_t* triangle_light = nullptr;
    const Vec2* uvs = nullptr;
    const Vec3* normals = nullptr; // par sommet, nullptr : normales géométriques
    const Texture* textures = nullptr;

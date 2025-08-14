@@ -9,6 +9,7 @@
 #include "core/vec3.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
+#include "scene/light_distribution.h"
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -215,4 +216,48 @@ TEST_CASE("écrêtage des fireflies : l'éclairage direct n'est jamais écrêté
    );
    REQUIRE(rt::max_component(expected) > 1e-3f);
    check_close(radiance, expected);
+}
+
+TEST_CASE(
+   "lumières de puissances très différentes : choix selon la puissance, même éclairage",
+   "[lights]"
+) {
+   const rt::PunctualLight dim{
+      .type = rt::PunctualLight::Type::Point,
+      .position = {1.0f, 0.0f, 2.0f},
+      .intensity = {1.0f, 1.0f, 1.0f},
+   };
+   const rt::PunctualLight bright{
+      .type = rt::PunctualLight::Type::Point,
+      .position = {-1.0f, 0.5f, 3.0f},
+      .intensity = {100.0f, 80.0f, 60.0f},
+   };
+   const TestScene t = make_scene({dim, bright}, false);
+   const rt::LightDistribution lights = rt::light_distribution(t.scene);
+   rt::SceneView view = t.view();
+   view.light_cdf = lights.cdf.data();
+   view.triangle_light = lights.triangle_light.data();
+   // La lampe la plus puissante est tirée bien plus souvent, la plus faible garde une chance
+   CHECK(lights.cdf[1] > 0.0f);
+   CHECK(lights.cdf[1] < 0.05f);
+
+   rt::Vec3 expected{0.0f, 0.0f, 0.0f};
+   for (const rt::PunctualLight& light : {dim, bright}) {
+      const rt::Vec3 to_light = light.position - kHitPoint;
+      expected += expected_radiance(
+         rt::normalize(to_light),
+         light.intensity / rt::length_squared(to_light)
+      );
+   }
+   const rt::Ray ray{kHitPoint + rt::Vec3{0.0f, 0.0f, 0.5f}, {0.0f, 0.0f, -1.0f}};
+   rt::Vec3 sum{0.0f, 0.0f, 0.0f};
+   constexpr int kSamples = 20'000;
+   std::uint32_t ray_count = 0;
+   for (int i = 0; i < kSamples; ++i) {
+      rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(0, static_cast<std::uint32_t>(i));
+      sum += rt::trace_path(ray, view, rng, ray_count);
+   }
+   const rt::Vec3 mean = sum / static_cast<float>(kSamples);
+   CHECK_THAT(mean.x, Catch::Matchers::WithinRel(expected.x, 0.01f));
+   CHECK_THAT(mean.z, Catch::Matchers::WithinRel(expected.z, 0.01f));
 }

@@ -20,6 +20,7 @@
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
 #include "scene/gltf_loader.h"
+#include "scene/light_distribution.h"
 #include "scene/photon_targets.h"
 
 #include <cuda_runtime.h>
@@ -211,6 +212,11 @@ struct Renderer::Impl {
       texels.upload(scene.texels);
       photon_target_buffer = DeviceBuffer<rt::PhotonTarget>(photon_targets.size());
       photon_target_buffer.upload(photon_targets);
+      const rt::LightDistribution lights = rt::light_distribution(scene);
+      light_cdf = DeviceBuffer<float>(lights.cdf.size());
+      light_cdf.upload(lights.cdf);
+      triangle_light = DeviceBuffer<std::int32_t>(lights.triangle_light.size());
+      triangle_light.upload(lights.triangle_light);
       int blocks_per_sm = 0;
       RT_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
          &blocks_per_sm,
@@ -238,6 +244,8 @@ struct Renderer::Impl {
          .emissive_triangle_count = static_cast<std::uint32_t>(emissive_triangles.size()),
          .punctual_lights = punctual_lights.data(),
          .punctual_light_count = static_cast<std::uint32_t>(punctual_lights.size()),
+         .light_cdf = light_cdf.size() == 0 ? nullptr : light_cdf.data(),
+         .triangle_light = triangle_light.size() == 0 ? nullptr : triangle_light.data(),
          .uvs = uvs.data(),
          .normals = normals.size() == 0 ? nullptr : normals.data(),
          .textures = textures.data(),
@@ -282,6 +290,8 @@ struct Renderer::Impl {
    AccumulatedStats accumulated;
    std::vector<rt::PhotonTarget> photon_targets;
    DeviceBuffer<rt::PhotonTarget> photon_target_buffer{0};
+   DeviceBuffer<float> light_cdf{0};
+   DeviceBuffer<std::int32_t> triangle_light{0};
    rt::Environment environment;
    bool use_mis = true;
    float firefly_clamp = 0.0f;

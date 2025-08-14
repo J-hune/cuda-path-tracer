@@ -53,19 +53,26 @@ RT_HOST_DEVICE constexpr float cosine_hemisphere_pdf(Vec3 local_direction) {
    return local_direction.z > 0.0f ? local_direction.z / kPi : 0.0f;
 }
 
-RT_HOST_DEVICE inline Vec3 sample_point_on_triangle(
-   const Vec3& v0,
-   const Vec3& v1,
-   const Vec3& v2,
-   Pcg32& rng
-) {
+// Coordonnées barycentriques (u, v) d'un point tiré uniformément sur un triangle : le point est
+// v0 + u (v1 - v0) + v (v2 - v0)
+RT_HOST_DEVICE inline Vec2 sample_triangle_barycentrics(Pcg32& rng) {
    float u = rng.next_float();
    float v = rng.next_float();
    if (u + v > 1.f) {
       u = 1.f - u;
       v = 1.f - v;
    }
-   return v0 + u * (v1 - v0) + v * (v2 - v0);
+   return {u, v};
+}
+
+RT_HOST_DEVICE inline Vec3 sample_point_on_triangle(
+   const Vec3& v0,
+   const Vec3& v1,
+   const Vec3& v2,
+   Pcg32& rng
+) {
+   const Vec2 b = sample_triangle_barycentrics(rng);
+   return v0 + b.x * (v1 - v0) + b.y * (v2 - v0);
 }
 
 } // namespace rt

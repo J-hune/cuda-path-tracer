@@ -16,6 +16,7 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 #include <filesystem>
+#include <map>
 #include <numbers>
 #include <simdjson.h>
 #include <span>
@@ -122,57 +123,6 @@ std::expected<fastgltf::Asset, std::string> parse_file(
 }
 
 // Matériaux du fichier, suivis d'un matériau par défaut pour les primitives qui n'en ont pas
-std::expected<std::vector<Material>, std::string> load_materials(const fastgltf::Asset& asset) {
-   std::vector<Material> materials;
-   for (const auto& material : asset.materials) {
-      const auto& base_color = material.pbrData.baseColorFactor;
-      const auto& emissive = material.emissiveFactor;
-      const float strength = material.emissiveStrength;
-
-      std::int32_t texture = -1;
-      if (material.pbrData.baseColorTexture.has_value()) {
-         const auto& info = *material.pbrData.baseColorTexture;
-         if (info.texCoordIndex != 0) {
-            return std::unexpected(
-               "Material '" + std::string(material.name) + "': only TEXCOORD_0 is supported"
-            );
-         }
-         texture = static_cast<std::int32_t>(info.textureIndex);
-      }
-
-      const float transmission = material.transmission
-                                    ? static_cast<float>(material.transmission->transmissionFactor)
-                                    : 0.0f;
-
-      // KHR_materials_volume : couleur atteinte après attenuationDistance -> coefficient
-      // d'absorption
-      Vec3 absorption{0.0f, 0.0f, 0.0f};
-      if (material.volume && material.volume->thicknessFactor > 0.0f &&
-          std::isfinite(material.volume->attenuationDistance)) {
-         const auto& color = material.volume->attenuationColor;
-         const float distance = material.volume->attenuationDistance;
-         absorption = {
-            -std::log(color.x()) / distance,
-            -std::log(color.y()) / distance,
-            -std::log(color.z()) / distance
-         };
-      }
-
-      materials.push_back({
-         .albedo = {base_color.x(), base_color.y(), base_color.z()},
-         .emission = {emissive.x() * strength, emissive.y() * strength, emissive.z() * strength},
-         .base_color_texture = texture,
-         .metallic = static_cast<float>(material.pbrData.metallicFactor),
-         .roughness = static_cast<float>(material.pbrData.roughnessFactor),
-         .transmission = transmission,
-         .ior = material.ior,
-         .absorption = absorption,
-         .dispersion = static_cast<float>(material.dispersion),
-      });
-   }
-   materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});
-   return materials;
-}
 
 // Octets encodés (PNG, JPEG…) d'une image, qu'elle soit dans un buffer ou intégrée directement
 std::expected<std::span<const std::byte>, std::string> image_bytes(
@@ -204,49 +154,162 @@ std::expected<std::span<const std::byte>, std::string> image_bytes(
 }
 
 // Décode toutes les textures en RGB linéaire, mises bout à bout dans scene.texels
-std::expected<void, std::string> load_textures(const fastgltf::Asset& asset, Scene& scene) {
-   for (const auto& texture : asset.textures) {
-      if (!texture.imageIndex.has_value()) {
-         return std::unexpected("Texture '" + std::string(texture.name) + "' has no image");
-      }
-      const auto& image = asset.images[*texture.imageIndex];
-      const std::string image_name(image.name);
-
-      const auto bytes = image_bytes(asset, image);
-      if (!bytes) {
-         return std::unexpected("Image '" + image_name + "': " + bytes.error());
-      }
-
-      int width = 0;
-      int height = 0;
-      int channels = 0;
-      stbi_uc* pixels = stbi_load_from_memory(
-         reinterpret_cast<const stbi_uc*>(bytes->data()),
-         static_cast<int>(bytes->size()),
-         &width,
-         &height,
-         &channels,
-         3
-      );
-      if (pixels == nullptr) {
-         return std::unexpected("Image '" + image_name + "': " + stbi_failure_reason());
-      }
-
-      scene.textures.push_back({
-         .offset = static_cast<std::uint32_t>(scene.texels.size()),
-         .width = static_cast<std::uint32_t>(width),
-         .height = static_cast<std::uint32_t>(height),
-      });
-      const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
-      for (std::size_t i = 0; i < pixel_count; ++i) {
-         const auto channel = [&](std::size_t c) {
-            return srgb_to_linear(static_cast<float>(pixels[(3 * i) + c]) / 255.f);
-         };
-         scene.texels.push_back({channel(0), channel(1), channel(2)});
-      }
-      stbi_image_free(pixels);
+// Décode la texture glTF texture_index et l'ajoute à la scène. Les textures de couleur (couleur de
+// base, émission) sont en sRGB ; les textures de données (metallic-roughness, normales) sont déjà
+// linéaires.
+std::expected<std::int32_t, std::string> load_texture(
+   const fastgltf::Asset& asset,
+   std::size_t texture_index,
+   bool srgb,
+   Scene& scene
+) {
+   const auto& texture = asset.textures[texture_index];
+   if (!texture.imageIndex.has_value()) {
+      return std::unexpected("Texture '" + std::string(texture.name) + "' has no image");
    }
-   return {};
+   const auto& image = asset.images[*texture.imageIndex];
+   const std::string image_name(image.name);
+
+   const auto bytes = image_bytes(asset, image);
+   if (!bytes) {
+      return std::unexpected("Image '" + image_name + "': " + bytes.error());
+   }
+
+   int width = 0;
+   int height = 0;
+   int channels = 0;
+   stbi_uc* pixels = stbi_load_from_memory(
+      reinterpret_cast<const stbi_uc*>(bytes->data()),
+      static_cast<int>(bytes->size()),
+      &width,
+      &height,
+      &channels,
+      3
+   );
+   if (pixels == nullptr) {
+      return std::unexpected("Image '" + image_name + "': " + stbi_failure_reason());
+   }
+
+   scene.textures.push_back({
+      .offset = static_cast<std::uint32_t>(scene.texels.size()),
+      .width = static_cast<std::uint32_t>(width),
+      .height = static_cast<std::uint32_t>(height),
+   });
+   const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+   for (std::size_t i = 0; i < pixel_count; ++i) {
+      const auto channel = [&](std::size_t c) {
+         const float value = static_cast<float>(pixels[(3 * i) + c]) / 255.f;
+         return srgb ? srgb_to_linear(value) : value;
+      };
+      scene.texels.push_back({channel(0), channel(1), channel(2)});
+   }
+   stbi_image_free(pixels);
+   return static_cast<std::int32_t>(scene.textures.size() - 1);
+}
+
+// Textures chargées à la demande, une seule fois par usage (couleur ou données)
+class TextureCache {
+public:
+   TextureCache(const fastgltf::Asset& asset, Scene& scene):
+      asset_(asset),
+      scene_(scene) {}
+
+   // Index de la texture dans la scène, -1 sans texture
+   // info : fastgltf::Optional d'une information de texture (TextureInfo ou dérivée)
+   template <typename OptionalInfo>
+   std::expected<std::int32_t, std::string> get(
+      const OptionalInfo& info,
+      bool srgb,
+      std::string_view material
+   ) {
+      if (!info.has_value()) {
+         return -1;
+      }
+      if (info->texCoordIndex != 0) {
+         return std::unexpected(
+            "Material '" + std::string(material) + "': only TEXCOORD_0 is supported"
+         );
+      }
+      const auto key = std::pair{info->textureIndex, srgb};
+      if (const auto found = loaded_.find(key); found != loaded_.end()) {
+         return found->second;
+      }
+      auto index = load_texture(asset_, info->textureIndex, srgb, scene_);
+      if (index) {
+         loaded_[key] = *index;
+      }
+      return index;
+   }
+
+private:
+   const fastgltf::Asset& asset_;
+   Scene& scene_;
+   std::map<std::pair<std::size_t, bool>, std::int32_t> loaded_;
+};
+
+std::expected<std::vector<Material>, std::string> load_materials(
+   const fastgltf::Asset& asset,
+   Scene& scene
+) {
+   TextureCache textures(asset, scene);
+   std::vector<Material> materials;
+   for (const auto& material : asset.materials) {
+      const auto& base_color = material.pbrData.baseColorFactor;
+      const auto& emissive = material.emissiveFactor;
+      const float strength = material.emissiveStrength;
+
+      const auto base_color_texture = textures.get(
+         material.pbrData.baseColorTexture,
+         true,
+         material.name
+      );
+      const auto metallic_roughness_texture = textures.get(
+         material.pbrData.metallicRoughnessTexture,
+         false,
+         material.name
+      );
+      const auto emissive_texture = textures.get(material.emissiveTexture, true, material.name);
+      for (const auto* texture :
+           {&base_color_texture, &metallic_roughness_texture, &emissive_texture}) {
+         if (!*texture) {
+            return std::unexpected(texture->error());
+         }
+      }
+
+      const float transmission = material.transmission
+                                    ? static_cast<float>(material.transmission->transmissionFactor)
+                                    : 0.0f;
+
+      // KHR_materials_volume : couleur atteinte après attenuationDistance -> coefficient
+      // d'absorption
+      Vec3 absorption{0.0f, 0.0f, 0.0f};
+      if (material.volume && material.volume->thicknessFactor > 0.0f &&
+          std::isfinite(material.volume->attenuationDistance)) {
+         const auto& color = material.volume->attenuationColor;
+         const float distance = material.volume->attenuationDistance;
+         absorption = {
+            -std::log(color.x()) / distance,
+            -std::log(color.y()) / distance,
+            -std::log(color.z()) / distance
+         };
+      }
+
+      materials.push_back({
+         .albedo = {base_color.x(), base_color.y(), base_color.z()},
+         .emission = {emissive.x() * strength, emissive.y() * strength, emissive.z() * strength},
+         .base_color_texture = *base_color_texture,
+         .metallic_roughness_texture = *metallic_roughness_texture,
+         .emissive_texture = *emissive_texture,
+         .metallic = static_cast<float>(material.pbrData.metallicFactor),
+         .roughness = static_cast<float>(material.pbrData.roughnessFactor),
+         .transmission = transmission,
+         .ior = material.ior,
+         .absorption = absorption,
+         .dispersion = static_cast<float>(material.dispersion),
+      });
+   }
+   materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});
+   return materials;
 }
 
 // Caméra glTF : regarde vers -z dans son repère local, haut selon +y
@@ -428,14 +491,11 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
    const fastgltf::Asset& asset = *parsed;
 
    Scene scene;
-   auto materials = load_materials(asset);
+   auto materials = load_materials(asset, scene);
    if (!materials) {
       return std::unexpected(materials.error());
    }
    scene.materials = std::move(*materials);
-   if (auto textures = load_textures(asset, scene); !textures) {
-      return std::unexpected(textures.error());
-   }
    const auto default_material = static_cast<std::uint32_t>(scene.materials.size() - 1);
 
    // iterateSceneNodes prend un lambda : on garde la première erreur pour la renvoyer ensuite

@@ -65,8 +65,50 @@ RT_HOST_DEVICE constexpr std::uint32_t light_count(const SceneView& view) {
    return view.emissive_triangle_count + view.punctual_light_count;
 }
 
+struct LightChoice {
+   std::uint32_t index; // triangles émissifs d'abord, puis lumières ponctuelles
+   float probability;
+};
+
+// Tire une lumière avec u dans [0, 1)
+RT_HOST_DEVICE inline LightChoice pick_light(const SceneView& view, float u) {
+   const std::uint32_t count = light_count(view);
+   if (view.light_cdf == nullptr) {
+      const auto picked = static_cast<std::uint32_t>(u * static_cast<float>(count));
+      return {
+         .index = picked < count ? picked : count - 1,
+         .probability = 1.0f / static_cast<float>(count)
+      };
+   }
+   // Dichotomie : light_cdf[low] <= u < light_cdf[high]. Une lumière de probabilité nulle
+   // (intervalle vide) n'est jamais tirée.
+   std::uint32_t low = 0;
+   std::uint32_t high = count;
+   while (high - low > 1) {
+      const std::uint32_t middle = (low + high) / 2;
+      if (u < view.light_cdf[middle]) {
+         high = middle;
+      } else {
+         low = middle;
+      }
+   }
+   return {.index = low, .probability = view.light_cdf[low + 1] - view.light_cdf[low]};
+}
+
+// Probabilité que pick_light tire le triangle émissif triangle
+RT_HOST_DEVICE inline float triangle_light_probability(
+   const SceneView& view,
+   std::uint32_t triangle
+) {
+   if (view.triangle_light == nullptr) {
+      return 1.0f / static_cast<float>(light_count(view));
+   }
+   const std::int32_t k = view.triangle_light[triangle];
+   return k < 0 ? 0.0f : view.light_cdf[k + 1] - view.light_cdf[k];
+}
+
 // Densité, par unité d'angle solide vue depuis le point éclairé, de tirer ce point d'une lampe
-// avec direct_light : 1 / (aire × nombre de lumières), convertie par distance² / cos θ_lampe
+// avec direct_light : probabilité du triangle / aire, convertie par distance² / cos θ_lampe
 RT_HOST_DEVICE inline float light_pdf(
    SceneView view,
    std::uint32_t triangle,
@@ -82,7 +124,7 @@ RT_HOST_DEVICE inline float light_pdf(
    if (cos_light <= 0.0f || area <= 0.0f) {
       return 0.0f;
    }
-   return distance * distance / (cos_light * area * static_cast<float>(light_count(view)));
+   return triangle_light_probability(view, triangle) * distance * distance / (cos_light * area);
 }
 
 // Normale d'ombrage interpolée entre les sommets, du même côté que la normale géométrique donnée.
@@ -117,6 +159,53 @@ RT_HOST_DEVICE inline float shadow_terminator(Vec3 geometric, Vec3 shading, Vec3
    return (-g * g * g) + (g * g) + g;
 }
 
+// Coordonnées de texture du point de coordonnées barycentriques (u, v) du triangle, (0, 0) si son
+// matériau n'a pas de texture (une scène sans textures peut ne pas fournir de coordonnées)
+RT_HOST_DEVICE inline Vec2 triangle_uv(SceneView view, std::uint32_t triangle, float u, float v) {
+   const Material& material = view.materials[view.material_indices[triangle]];
+   if (material.base_color_texture < 0 && material.metallic_roughness_texture < 0 &&
+       material.emissive_texture < 0) {
+      return {0.0f, 0.0f};
+   }
+   const Vec2 uv0 = view.uvs[view.indices[(3 * triangle) + 0]];
+   const Vec2 uv1 = view.uvs[view.indices[(3 * triangle) + 1]];
+   const Vec2 uv2 = view.uvs[view.indices[(3 * triangle) + 2]];
+   return ((1.0f - u - v) * uv0) + (u * uv1) + (v * uv2);
+}
+
+// Paramètres de BSDF au point de coordonnées de texture uv, textures appliquées
+RT_HOST_DEVICE inline SurfaceParams surface_params(
+   SceneView view,
+   const Material& material,
+   Vec2 uv
+) {
+   SurfaceParams params{
+      .base_color = material.albedo,
+      .metallic = material.metallic,
+      .roughness = material.roughness,
+   };
+   if (material.base_color_texture >= 0) {
+      const Texture texture = view.textures[material.base_color_texture];
+      params.base_color = params.base_color * sample_texture(texture, view.texels, uv);
+   }
+   if (material.metallic_roughness_texture >= 0) {
+      const Texture texture = view.textures[material.metallic_roughness_texture];
+      const Vec3 texel = sample_texture(texture, view.texels, uv);
+      params.roughness *= texel.y;
+      params.metallic *= texel.z;
+   }
+   return params;
+}
+
+// Lumière émise au point de coordonnées de texture uv
+RT_HOST_DEVICE inline Vec3 surface_emission(SceneView view, const Material& material, Vec2 uv) {
+   if (material.emissive_texture < 0) {
+      return material.emission;
+   }
+   const Texture texture = view.textures[material.emissive_texture];
+   return material.emission * sample_texture(texture, view.texels, uv);
+}
+
 // Surface au point x : repère local (normale orientée vers l'observateur), direction d'observation
 // wo dans ce repère, et paramètres de la BSDF
 struct ShadingPoint {
@@ -132,13 +221,15 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    SceneView view,
    const ShadingPoint& shading,
    std::uint32_t triangle,
+   float probability,
    Pcg32& rng,
    std::uint32_t& ray_count
 ) {
    const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
    const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
    const Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
-   const Vec3 y = sample_point_on_triangle(v0, v1, v2, rng);
+   const Vec2 b = sample_triangle_barycentrics(rng);
+   const Vec3 y = v0 + (b.x * (v1 - v0)) + (b.y * (v2 - v0));
 
    const Vec3 cross_l = cross(v1 - v0, v2 - v0);
    const float area = 0.5f * length(cross_l);
@@ -166,13 +257,13 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    }
 
    const Material material = view.materials[view.material_indices[triangle]];
-   // Densité du point tiré = 1 / (aire × nombre de lumières), ramenée en angle solide par d² /
-   // cos_y
-   const float pdf_light = d2 / (cos_y * area * static_cast<float>(light_count(view)));
+   // Densité du point tiré = probabilité du triangle / aire, ramenée en angle solide par d² / cos_y
+   const float pdf_light = probability * d2 / (cos_y * area);
    const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
    const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
    const float terminator = shadow_terminator(n_g, n, wi);
-   return f * material.emission * (cos_x * weight * terminator / pdf_light);
+   const Vec3 emission = surface_emission(view, material, triangle_uv(view, triangle, b.x, b.y));
+   return f * emission * (cos_x * weight * terminator / pdf_light);
 }
 
 // Éclairage direct par une lumière ponctuelle. Sans surface, elle ne peut pas être touchée par un
@@ -181,6 +272,7 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
    SceneView view,
    const ShadingPoint& shading,
    const PunctualLight& light,
+   float probability,
    std::uint32_t& ray_count
 ) {
    const Vec3 x = shading.position;
@@ -217,9 +309,8 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
    if (is_occluded(view, x + (n_g * kRayOffset), target)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
-   // Lumière choisie avec la probabilité 1 / nombre de lumières
    const float terminator = shadow_terminator(n_g, n, wi);
-   return f * irradiance * (cos_x * terminator * static_cast<float>(light_count(view)));
+   return f * irradiance * (cos_x * terminator / probability);
 }
 
 // Éclairage direct : choisit uniformément une lumière (triangle émissif ou ponctuelle).
@@ -234,35 +325,13 @@ RT_HOST_DEVICE inline Vec3 direct_light(
    if (count == 0) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
-   // Choix uniforme, index borné à count - 1 (l'arrondi en float peut donner count)
-   const auto picked = static_cast<std::uint32_t>(rng.next_float() * static_cast<float>(count));
-   const std::uint32_t k = picked < count ? picked : count - 1;
-   if (k < view.emissive_triangle_count) {
-      return direct_from_triangle(view, shading, view.emissive_triangles[k], rng, ray_count);
+   const LightChoice light = pick_light(view, rng.next_float());
+   if (light.index < view.emissive_triangle_count) {
+      const std::uint32_t triangle = view.emissive_triangles[light.index];
+      return direct_from_triangle(view, shading, triangle, light.probability, rng, ray_count);
    }
-   const PunctualLight& light = view.punctual_lights[k - view.emissive_triangle_count];
-   return direct_from_punctual(view, shading, light, ray_count);
-}
-
-// Coordonnées de texture au point touché, interpolées entre les trois sommets
-RT_HOST_DEVICE inline Vec2 interpolate_uv(SceneView view, const Hit& hit) {
-   const Vec2 uv0 = view.uvs[view.indices[(3 * hit.triangle) + 0]];
-   const Vec2 uv1 = view.uvs[view.indices[(3 * hit.triangle) + 1]];
-   const Vec2 uv2 = view.uvs[view.indices[(3 * hit.triangle) + 2]];
-   return ((1.0f - hit.u - hit.v) * uv0) + (hit.u * uv1) + (hit.v * uv2);
-}
-
-// Albédo du matériau au point touché : couleur de base, multipliée par la texture s'il y en a une
-RT_HOST_DEVICE inline Vec3 surface_albedo(
-   SceneView view,
-   const Material& material,
-   const Hit& hit
-) {
-   if (material.base_color_texture < 0) {
-      return material.albedo;
-   }
-   const Texture texture = view.textures[material.base_color_texture];
-   return material.albedo * sample_texture(texture, view.texels, interpolate_uv(view, hit));
+   const PunctualLight& punctual = view.punctual_lights[light.index - view.emissive_triangle_count];
+   return direct_from_punctual(view, shading, punctual, light.probability, ray_count);
 }
 
 // Réflexion ou réfraction sur une surface diélectrique lisse. Met à jour throughput (absorption
@@ -305,8 +374,7 @@ RT_HOST_DEVICE inline Ray scatter_glass(
 RT_HOST_DEVICE inline ShadingPoint make_shading_point(
    SceneView view,
    const Hit& hit,
-   const Material& material,
-   Vec3 albedo,
+   const SurfaceParams& params,
    const Ray& ray
 ) {
    const Vec3 n_g = facing_normal(view, hit.triangle, ray.direction);
@@ -319,8 +387,7 @@ RT_HOST_DEVICE inline ShadingPoint make_shading_point(
       .geometric_normal = n_g,
       .frame = frame,
       .wo = frame.to_local(-ray.direction),
-      .params =
-         {.base_color = albedo, .metallic = material.metallic, .roughness = material.roughness},
+      .params = params,
    };
 }
 
@@ -411,17 +478,22 @@ RT_HOST_DEVICE inline bool trace_bounce(
 
    path.distance += hit.t;
    const Material material = view.materials[view.material_indices[hit.triangle]];
+   const Vec2 uv = triangle_uv(view, hit.triangle, hit.u, hit.v);
    if (max_component(material.emission) > 0.0f && !path.caustic_path) {
+      const Vec3 emission = surface_emission(view, material, uv);
       if (path.bounce == 0 || path.specular_bounce) {
-         path.radiance += clamp_contribution(path.throughput * material.emission, max_contribution);
-      } else if (view.use_mis) {
+         path.radiance += clamp_contribution(path.throughput * emission, max_contribution);
+      } else {
+         // Une lumière que l'éclairage direct ne tire jamais compte en entier
          const float pdf_light = light_pdf(view, hit.triangle, path.ray.direction, hit.t);
-         const Vec3 emitted = path.throughput * material.emission *
-                              power_heuristic(path.bsdf_pdf, pdf_light);
-         path.radiance += clamp_contribution(emitted, max_contribution);
+         const float weight = pdf_light <= 0.0f ? 1.0f
+                              : view.use_mis    ? power_heuristic(path.bsdf_pdf, pdf_light)
+                                                : 0.0f;
+         path.radiance += clamp_contribution(path.throughput * emission * weight, max_contribution);
       }
    }
-   const Vec3 albedo = surface_albedo(view, material, hit);
+   const SurfaceParams params = surface_params(view, material, uv);
+   const Vec3 albedo = params.base_color;
    if (path.bounce == 0 && first_hit != nullptr) {
       const Vec3 facing = facing_normal(view, hit.triangle, path.ray.direction);
       *first_hit = {.albedo = albedo, .normal = shading_normal(view, hit, facing)};
@@ -443,7 +515,7 @@ RT_HOST_DEVICE inline bool trace_bounce(
       path.caustic_path = path.after_diffuse;
    } else {
       // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
-      const ShadingPoint shading = make_shading_point(view, hit, material, albedo, path.ray);
+      const ShadingPoint shading = make_shading_point(view, hit, params, path.ray);
       const Vec3 n_g = shading.geometric_normal;
       const Vec3 n = shading.frame.normal;
       const bool glossy = photons && is_glossy_metal(material);

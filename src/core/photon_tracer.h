@@ -97,10 +97,9 @@ RT_HOST_DEVICE inline TargetedDirection sample_targets(SceneView view, Vec3 orig
 // Photon émis par une lumière choisie uniformément. Sa puissance est le flux de la lumière divisé
 // par la probabilité de l'avoir tiré, pour un seul photon : diviser ensuite par le nombre émis.
 RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
-   const std::uint32_t count = light_count(view);
-   const auto picked = static_cast<std::uint32_t>(rng.next_float() * static_cast<float>(count));
-   const std::uint32_t k = picked < count ? picked : count - 1;
-   const auto light_choice = static_cast<float>(count);
+   const LightChoice choice = pick_light(view, rng.next_float());
+   const std::uint32_t k = choice.index;
+   const float light_choice = 1.0f / choice.probability;
 
    if (k < view.emissive_triangle_count) {
       // Triangle émissif, émis des deux côtés selon une loi en cosinus
@@ -108,17 +107,19 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
       const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
       const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
       const Vec3 v2 = view.positions[view.indices[(3 * triangle) + 2]];
-      const Vec3 y = sample_point_on_triangle(v0, v1, v2, rng);
+      const Vec2 b = sample_triangle_barycentrics(rng);
+      const Vec3 y = v0 + (b.x * (v1 - v0)) + (b.y * (v2 - v0));
       const Vec3 cross_l = cross(v1 - v0, v2 - v0);
       const float area = 0.5f * length(cross_l);
       const Material material = view.materials[view.material_indices[triangle]];
+      const Vec3 emission = surface_emission(view, material, triangle_uv(view, triangle, b.x, b.y));
       if (view.photon_target_count > 0) {
          const TargetedDirection target = sample_targets(view, y, rng);
          const Vec3 n_l = normalize(cross_l);
          const float cos_l = dot(n_l, target.direction);
          return {
             .ray = {y + (n_l * (cos_l > 0.0f ? kRayOffset : -kRayOffset)), target.direction},
-            .power = material.emission * (std::fabs(cos_l) * area * light_choice / target.pdf),
+            .power = emission * (std::fabs(cos_l) * area * light_choice / target.pdf),
          };
       }
       const Vec3 side = rng.next_float() < 0.5f ? normalize(cross_l) : -normalize(cross_l);
@@ -127,7 +128,7 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
       );
       return {
          .ray = {y + (side * kRayOffset), direction},
-         .power = material.emission * (2.0f * kPi * area * light_choice),
+         .power = emission * (2.0f * kPi * area * light_choice),
       };
    }
 
@@ -191,12 +192,17 @@ RT_HOST_DEVICE inline bool trace_photon(
          return false;
       }
       const Material material = view.materials[view.material_indices[hit.triangle]];
-      const Vec3 albedo = surface_albedo(view, material, hit);
+      const SurfaceParams params = surface_params(
+         view,
+         material,
+         triangle_uv(view, hit.triangle, hit.u, hit.v)
+      );
+      const Vec3 albedo = params.base_color;
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
          ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput, wavelength);
       } else if (is_glossy_metal(material)) {
-         const ShadingPoint shading = make_shading_point(view, hit, material, albedo, ray);
+         const ShadingPoint shading = make_shading_point(view, hit, params, ray);
          const BsdfSample bsdf = principled::sample(
             shading.params,
             shading.wo,
