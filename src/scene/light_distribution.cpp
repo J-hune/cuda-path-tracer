@@ -79,7 +79,7 @@ Vec3 average_over_triangle(
    return sum / static_cast<float>(count);
 }
 
-// Puissance émise par un triangle, émis des deux côtés : π × 2 × aire × émission moyenne
+// Puissance émise par un triangle : π × aire × émission moyenne, par face émettrice
 float triangle_power(const Scene& scene, std::uint32_t triangle) {
    const Material& material = scene.materials[scene.material_indices[triangle]];
    const std::uint32_t i0 = scene.indices[(3 * triangle) + 0];
@@ -93,7 +93,8 @@ float triangle_power(const Scene& scene, std::uint32_t triangle) {
       emission = emission *
                  average_over_triangle(scene, texture, scene.uvs[i0], scene.uvs[i1], scene.uvs[i2]);
    }
-   return 2.0f * kPi * area * luminance(emission);
+   const float sides = material.double_sided ? 2.0f : 1.0f;
+   return sides * kPi * area * luminance(emission);
 }
 
 float punctual_power(const PunctualLight& light, float scene_radius) {

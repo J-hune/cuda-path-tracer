@@ -29,6 +29,9 @@ struct Material {
    Vec3 absorption{0.0f, 0.0f, 0.0f};
    // 20 / nombre d'Abbe, 0 : indice indépendant de la longueur d'onde
    float dispersion = 0.0f;
+   // doubleSided de glTF : une surface à simple face n'émet que du côté de sa normale (ordre des
+   // sommets)
+   bool double_sided = true;
 };
 
 } // namespace rt

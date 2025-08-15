@@ -284,8 +284,10 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    const float d2 = length_squared(y - x);
    const Vec3 wi = (y - x) / std::sqrt(d2);
 
+   const Material material = view.materials[view.material_indices[triangle]];
    const float cos_x = dot(n, wi);
-   const float cos_y = std::fabs(dot(n_l, wi));
+   // Une lampe à simple face n'éclaire que les points situés du côté de sa normale
+   const float cos_y = material.double_sided ? std::fabs(dot(n_l, wi)) : -dot(n_l, wi);
    if (cos_x <= 0.0f || cos_y <= 0.0f || dot(n_g, wi) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
@@ -299,7 +301,6 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
-   const Material material = view.materials[view.material_indices[triangle]];
    // Densité du point tiré = probabilité du triangle / aire, ramenée en angle solide par d² / cos_y
    const float pdf_light = probability * d2 / (cos_y * area);
    const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
@@ -524,7 +525,10 @@ RT_HOST_DEVICE inline bool trace_bounce(
    path.distance += hit.t;
    const Material material = view.materials[view.material_indices[hit.triangle]];
    const Vec2 uv = triangle_uv(view, hit.triangle, hit.u, hit.v);
-   if (max_component(material.emission) > 0.0f && !path.caustic_path) {
+   const bool emits_toward_ray = material.double_sided ||
+                                 dot(geometric_normal(view, hit.triangle), path.ray.direction) <
+                                    0.0f;
+   if (max_component(material.emission) > 0.0f && emits_toward_ray && !path.caustic_path) {
       const Vec3 emission = surface_emission(view, material, uv);
       if (path.bounce == 0 || path.specular_bounce) {
          path.radiance += clamp_contribution(path.throughput * emission, max_contribution);

@@ -100,14 +100,17 @@ TestScene make_scene(const rt::PunctualLight& light, bool glass, bool mirror) {
 }
 
 // Sol mat, lame de verre d'indice 1, et carré émissif au-dessus de la lame
-TestScene make_area_light_scene() {
+// La lampe regarde vers le bas (vers le sol) sauf si light_up ; double_sided : elle éclaire des
+// deux côtés
+TestScene make_area_light_scene(bool light_up = false, bool double_sided = true) {
    TestScene t;
    rt::Scene& s = t.scene;
    s.materials = make_scene({}, false, false).scene.materials;
+   s.materials[kLightMaterial].double_sided = double_sided;
    add_quad(s, 10.0f, 0.0f, true, kFloorMaterial);
    add_quad(s, 2.0f, 1.1f, true, kGlassMaterial);
    add_quad(s, 2.0f, 1.0f, false, kGlassMaterial);
-   add_quad(s, 0.5f, 2.0f, false, kLightMaterial);
+   add_quad(s, 0.5f, 2.0f, light_up, kLightMaterial);
    s.emissive_triangles = {6, 7};
    t.bvh = rt::build_bvh(s);
    return t;
@@ -303,4 +306,27 @@ TEST_CASE("caustiques : photons et path tracer ne comptent pas deux fois la lumi
    rt::SceneView targeted_view = targeted_scene.view();
    targeted_view.caustics = targeted_map.view;
    CHECK_THAT(floor_radiance(targeted_view, 64).x, WithinRel(path_traced.x, 0.03f));
+}
+
+TEST_CASE("lampe à simple face : n'éclaire que du côté de sa normale", "[photon]") {
+   // Tournée vers le sol, elle donne le même éclairage qu'une lampe à double face
+   const TestScene both = make_area_light_scene(false, true);
+   const TestScene front = make_area_light_scene(false, false);
+   const rt::Vec3 reference = floor_radiance(both.view(), 100'000);
+   CHECK_THAT(floor_radiance(front.view(), 100'000).x, WithinRel(reference.x, 0.03f));
+
+   // Les photons d'une lampe à simple face partent tous vers le sol : même éclairement
+   const rt::test::CpuPhotonMap map(
+      rt::test::trace_photons(front.view(), 2'000'000, 9),
+      1u << 16,
+      0.15f
+   );
+   rt::SceneView view = front.view();
+   view.caustics = map.view;
+   CHECK_THAT(floor_radiance(view, 64).x, WithinRel(reference.x, 0.03f));
+
+   // Tournée vers le plafond, elle n'éclaire plus le sol, ni directement ni par les photons
+   const TestScene away = make_area_light_scene(true, false);
+   CHECK(floor_radiance(away.view(), 10'000).x == 0.0f);
+   CHECK(rt::test::trace_photons(away.view(), 100'000, 9).empty());
 }

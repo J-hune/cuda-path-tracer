@@ -312,6 +312,7 @@ std::expected<std::vector<Material>, std::string> load_materials(
          .ior = material.ior,
          .absorption = absorption,
          .dispersion = static_cast<float>(material.dispersion),
+         .double_sided = material.doubleSided,
       });
    }
    materials.push_back({.albedo = {0.8f, 0.8f, 0.8f}, .emission = {0.f, 0.f, 0.f}});

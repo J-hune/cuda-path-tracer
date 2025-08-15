@@ -102,7 +102,7 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
    const float light_choice = 1.0f / choice.probability;
 
    if (k < view.emissive_triangle_count) {
-      // Triangle émissif, émis des deux côtés selon une loi en cosinus
+      // Triangle émissif, selon une loi en cosinus, des deux côtés ou du côté de sa normale
       const std::uint32_t triangle = view.emissive_triangles[k];
       const Vec3 v0 = view.positions[view.indices[(3 * triangle) + 0]];
       const Vec3 v1 = view.positions[view.indices[(3 * triangle) + 1]];
@@ -117,18 +117,24 @@ RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
          const TargetedDirection target = sample_targets(view, y, rng);
          const Vec3 n_l = normalize(cross_l);
          const float cos_l = dot(n_l, target.direction);
+         const float emitted = material.double_sided ? std::fabs(cos_l) : std::fmax(cos_l, 0.0f);
          return {
             .ray = {y + (n_l * (cos_l > 0.0f ? kRayOffset : -kRayOffset)), target.direction},
-            .power = emission * (std::fabs(cos_l) * area * light_choice / target.pdf),
+            .power = emission * (emitted * area * light_choice / target.pdf),
          };
       }
-      const Vec3 side = rng.next_float() < 0.5f ? normalize(cross_l) : -normalize(cross_l);
+      Vec3 side = normalize(cross_l);
+      float sides = 1.0f;
+      if (material.double_sided) {
+         side = rng.next_float() < 0.5f ? side : -side;
+         sides = 2.0f;
+      }
       const Vec3 direction = make_frame(side).to_world(
          square_to_cosine_hemisphere({rng.next_float(), rng.next_float()})
       );
       return {
          .ray = {y + (side * kRayOffset), direction},
-         .power = emission * (2.0f * kPi * area * light_choice),
+         .power = emission * (sides * kPi * area * light_choice),
       };
    }
 
