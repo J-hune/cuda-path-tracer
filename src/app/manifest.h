@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/camera.h"
 #include "gpu/renderer.h"
 
 #include <cstdint>
@@ -19,9 +20,11 @@ struct RenderManifest {
    std::uint64_t rays = 0;
 
    bool mis = true;
-   float firefly_clamp = 0.0f;   // 0 : désactivé
-   float aperture_radius = 0.0f; // 0 : sans profondeur de champ
-   float focus_distance = 0.0f;
+   float firefly_clamp = 0.0f; // 0 : désactivé
+   rt::CameraSettings camera;
+   std::string environment; // HDRI, vide si aucune
+   float environment_strength = 1.0f;
+   float environment_rotation = 0.0f; // degrés
    std::string caustics;
    std::string denoiser;
    int max_bounces = 0;

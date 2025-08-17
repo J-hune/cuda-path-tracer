@@ -92,7 +92,8 @@ std::string export_render(
    const Renderer::DeviceInfo& device,
    const std::string& scene_path,
    Size size,
-   const rt::CameraSettings& camera
+   const rt::CameraSettings& camera,
+   const std::string& environment
 ) {
    const std::string base = std::format("render_{}spp", renderer.sample_count());
    const Renderer::AccumulatedStats accumulated = renderer.accumulated();
@@ -107,8 +108,10 @@ std::string export_render(
       .rays = accumulated.rays,
       .mis = renderer.mis(),
       .firefly_clamp = renderer.firefly_clamp(),
-      .aperture_radius = camera.aperture_radius,
-      .focus_distance = camera.focus_distance,
+      .camera = camera,
+      .environment = environment,
+      .environment_strength = renderer.environment_strength(),
+      .environment_rotation = renderer.environment_rotation() * 180.0f / rt::kPi,
       .caustics = caustic_description(renderer),
       .denoiser = renderer.denoiser() ? "OptiX (albédo et normales)" : "aucun",
       .max_bounces = rt::kMaxBounces,
@@ -415,7 +418,8 @@ int main(int argc, char** argv) {
             device,
             scene_path,
             window->image_size(),
-            fly_camera.settings()
+            fly_camera.settings(),
+            scene->environment_image.source
          );
          controls.export_requested = false;
       }

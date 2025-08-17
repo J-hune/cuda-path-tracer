@@ -1,5 +1,7 @@
 #include "app/manifest.h"
 
+#include "core/vec3.h"
+
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -88,11 +90,27 @@ bool write_manifest(const std::string& path, const RenderManifest& m) {
    file << std::format("    \"rays\": {},\n", m.rays);
    file << std::format("    \"mrays_per_second\": {:.1f}\n", mrays_per_second);
    file << "  },\n";
+   const auto vec3 = [](rt::Vec3 v) { return std::format("[{}, {}, {}]", v.x, v.y, v.z); };
+   file << "  \"camera\": {\n";
+   file << std::format("    \"position\": {},\n", vec3(m.camera.position));
+   file << std::format("    \"target\": {},\n", vec3(m.camera.target));
+   file << std::format("    \"up\": {},\n", vec3(m.camera.up));
+   file << std::format("    \"vertical_fov_degrees\": {},\n", m.camera.vertical_fov_degrees);
+   file << std::format("    \"aperture_radius\": {},\n", m.camera.aperture_radius);
+   file << std::format("    \"focus_distance\": {}\n", m.camera.focus_distance);
+   file << "  },\n";
+   if (m.environment.empty()) {
+      file << "  \"environment\": null,\n";
+   } else {
+      file << "  \"environment\": {\n";
+      file << std::format("    \"file\": {},\n", json_string(m.environment));
+      file << std::format("    \"strength\": {},\n", m.environment_strength);
+      file << std::format("    \"rotation_degrees\": {}\n", m.environment_rotation);
+      file << "  },\n";
+   }
    file << "  \"settings\": {\n";
    file << std::format("    \"mis\": {},\n", m.mis);
    file << std::format("    \"firefly_clamp\": {},\n", m.firefly_clamp);
-   file << std::format("    \"aperture_radius\": {},\n", m.aperture_radius);
-   file << std::format("    \"focus_distance\": {},\n", m.focus_distance);
    file << std::format("    \"caustics\": {},\n", json_string(m.caustics));
    file << std::format("    \"denoiser\": {},\n", json_string(m.denoiser));
    file << std::format("    \"max_bounces\": {},\n", m.max_bounces);
