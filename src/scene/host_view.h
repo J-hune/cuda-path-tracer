@@ -28,6 +28,7 @@ inline SceneView host_view(const Scene& scene, const Bvh& bvh) {
    view.textures = scene.textures.data();
    view.texels = scene.texels.data();
    view.environment = scene.environment;
+   view.environment_map = scene.environment_image.view();
    return view;
 }
 

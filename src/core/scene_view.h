@@ -41,6 +41,8 @@ struct SceneView {
    const Texture* textures = nullptr;
    const Vec3* texels = nullptr;
    Environment environment;
+   // HDRI, prioritaire sur le dégradé quand elle est présente : la dernière des lumières
+   EnvironmentMap environment_map;
    // Combinaison de l'éclairage direct et du tirage de la BSDF par MIS (sinon : éclairage direct
    // seul)
    bool use_mis = true;

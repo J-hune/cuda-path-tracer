@@ -11,6 +11,7 @@
 #include "core/vec3.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
+#include "scene/environment_map.h"
 #include "scene/gltf_loader.h"
 #include "scene/host_view.h"
 
@@ -21,6 +22,8 @@
 #include <iostream>
 #include <ratio>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -233,6 +236,24 @@ bool draw_panel(Renderer& renderer, Controls& controls, FlyCamera& fly_camera, S
 
    const bool lens_changed = draw_lens_settings(fly_camera);
 
+   if (renderer.has_environment_map()) {
+      ImGui::SeparatorText("Environnement");
+      float strength = renderer.environment_strength();
+      float rotation_degrees = renderer.environment_rotation() * 180.0f / rt::kPi;
+      bool changed = ImGui::SliderFloat(
+         "Intensité",
+         &strength,
+         0.0f,
+         10.0f,
+         "%.2f",
+         ImGuiSliderFlags_Logarithmic
+      );
+      changed |= ImGui::SliderFloat("Rotation", &rotation_degrees, -180.0f, 180.0f, "%.0f°");
+      if (changed) {
+         renderer.set_environment(strength, rotation_degrees * rt::kPi / 180.0f);
+      }
+   }
+
    ImGui::SeparatorText("Affichage");
    rt::DisplaySettings display = renderer.display();
    int tone_mapping = static_cast<int>(display.tone_mapping);
@@ -290,18 +311,31 @@ void handle_shortcuts(Window& window, Renderer& renderer, Controls& controls) {
 } // namespace
 
 int main(int argc, char** argv) {
-   if (argc < 2) {
-      std::cerr << "Usage : " << argv[0] << " <scene.glb>\n";
+   if (argc != 2 && argc != 4) {
+      std::cerr << "Usage : " << argv[0] << " <scene.glb> [--hdri <environnement.exr|.hdr>]\n";
       return EXIT_FAILURE;
    }
 
    constexpr int kWidth = 800;
    constexpr int kHeight = 450;
 
-   const auto scene = rt::load_gltf(argv[1]);
+   auto scene = rt::load_gltf(argv[1]);
    if (!scene) {
       std::cerr << "Failed to load GLTF file: " << scene.error() << '\n';
       return EXIT_FAILURE;
+   }
+   // HDRI donnée en ligne de commande : remplace celle de la scène
+   if (argc == 4) {
+      if (std::string_view(argv[2]) != "--hdri") {
+         std::cerr << "Unknown option: " << argv[2] << '\n';
+         return EXIT_FAILURE;
+      }
+      auto environment = rt::load_environment(argv[3], 1.0f, 0.0f);
+      if (!environment) {
+         std::cerr << environment.error() << '\n';
+         return EXIT_FAILURE;
+      }
+      scene->environment_image = std::move(*environment);
    }
 
    // On affiche le nombre de sommets et de triangles dans la scène

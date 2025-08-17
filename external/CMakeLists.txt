@@ -48,3 +48,19 @@ add_library(
 )
 target_include_directories(imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+
+# tinyexr : lecture des images EXR (HDRI d'environnement), avec son décompresseur miniz.
+# SOURCE_SUBDIR inexistant : on ne construit pas son projet CMake (exemples, tests).
+FetchContent_Declare(
+   tinyexr
+   GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+   GIT_TAG v3.2.0
+   GIT_SHALLOW TRUE
+   SOURCE_SUBDIR none
+)
+FetchContent_MakeAvailable(tinyexr)
+
+add_library(tinyexr STATIC tinyexr.cpp ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c)
+target_include_directories(
+   tinyexr SYSTEM PUBLIC ${tinyexr_SOURCE_DIR} ${tinyexr_SOURCE_DIR}/deps/miniz
+)

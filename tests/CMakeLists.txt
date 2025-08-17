@@ -34,6 +34,7 @@ add_executable(rt_tests
    core/test_spectrum.cpp
    core/test_triangle.cpp
    scene/test_bvh.cpp
+   scene/test_environment.cpp
    scene/test_light_distribution.cpp
    scene/test_tangents.cpp
 )

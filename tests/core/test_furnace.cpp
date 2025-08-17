@@ -8,6 +8,7 @@
 #include "core/scene_view.h"
 #include "core/vec3.h"
 #include "scene/bvh_builder.h"
+#include "scene/environment_map.h"
 #include "scene/gltf_loader.h"
 
 #include <catch2/catch_message.hpp>
@@ -73,6 +74,7 @@ rt::SceneView make_view(const rt::Scene& scene, const rt::Bvh& bvh) {
       .emissive_triangles = nullptr,
       .emissive_triangle_count = 0,
       .environment = scene.environment,
+      .environment_map = {},
       .caustics = {},
    };
 }
@@ -192,4 +194,47 @@ TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
    }
 
    CHECK_THAT(sum / count, Catch::Matchers::WithinAbs(1.0, 0.01));
+}
+
+TEST_CASE("four blanc : une HDRI uniforme éclaire comme l'environnement uniforme", "[furnace]") {
+   // HDRI blanche de luminance 1 : tirée par l'éclairage direct et pondérée par MIS
+   rt::EnvironmentImage image;
+   image.width = 16;
+   image.height = 8;
+   image.texels.assign(std::size_t{16} * 8, rt::Vec3{1.0f, 1.0f, 1.0f});
+   rt::build_environment_distribution(image);
+
+   const rt::SurfaceParams params{
+      .base_color = {0.8f, 0.8f, 0.8f},
+      .metallic = 0.0f,
+      .roughness = 0.5f
+   };
+   rt::Scene scene = make_cube({
+      .albedo = params.base_color,
+      .emission = {0, 0, 0},
+      .metallic = params.metallic,
+      .roughness = params.roughness,
+   });
+   scene.environment = {};
+   const rt::Bvh bvh = rt::build_bvh(scene);
+   rt::SceneView view = make_view(scene, bvh);
+   view.environment_map = image.view();
+
+   constexpr int kSamples = 40'000;
+   for (const float angle_degrees : {0.0f, 60.0f}) {
+      const float angle = angle_degrees * rt::kPi / 180.0f;
+      const rt::Vec3 direction{std::sin(angle), 0.0f, -std::cos(angle)};
+      const rt::Ray ray{rt::Vec3{0.0f, 0.2f, 1.0f} - (direction * 3.0f), direction};
+      double sum = 0.0;
+      for (int i = 0; i < kSamples; ++i) {
+         rt::Pcg32 rng = rt::Pcg32::make_pixel_rng(0, static_cast<std::uint32_t>(i));
+         std::uint32_t ray_count = 0;
+         sum += rt::trace_path(ray, view, rng, ray_count).x;
+      }
+      INFO("angle = " << angle_degrees << "°");
+      CHECK_THAT(
+         sum / kSamples,
+         Catch::Matchers::WithinRel(directional_albedo(params, -direction), 0.01)
+      );
+   }
 }

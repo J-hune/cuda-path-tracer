@@ -75,6 +75,7 @@ TEST_CASE("intersect_scene trouve la même intersection que la force brute", "[s
       .emissive_triangles = nullptr,
       .emissive_triangle_count = 0,
       .environment = {},
+      .environment_map = {},
       .caustics = {},
    };
 
@@ -117,6 +118,7 @@ TEST_CASE("intersect_scene sur une scène vide", "[scene_view]") {
       .emissive_triangles = nullptr,
       .emissive_triangle_count = 0,
       .environment = {},
+      .environment_map = {},
       .caustics = {},
    };
    rt::Hit hit{};

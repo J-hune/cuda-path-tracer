@@ -94,12 +94,23 @@ RT_HOST_DEVICE inline TargetedDirection sample_targets(SceneView view, Vec3 orig
    return {.direction = direction, .pdf = std::fmax(covering, 1.0f) / (2.0f * kPi * total)};
 }
 
-// Photon émis par une lumière choisie uniformément. Sa puissance est le flux de la lumière divisé
-// par la probabilité de l'avoir tiré, pour un seul photon : diviser ensuite par le nombre émis.
+// Photon émis par une lumière choisie selon la répartition des lumières. Sa puissance est le flux
+// de la lumière divisé par la probabilité de l'avoir tirée, pour un seul photon : diviser ensuite
+// par le nombre émis. L'HDRI n'émet pas de photons : ses caustiques restent au path tracer.
 RT_HOST_DEVICE inline PhotonRay emit_photon(SceneView view, Pcg32& rng) {
-   const LightChoice choice = pick_light(view, rng.next_float());
+   float others = 1.0f; // probabilité totale des lumières autres que l'HDRI
+   if (view.environment_map.present()) {
+      const std::uint32_t k_env = environment_light_index(view);
+      others = view.light_cdf != nullptr
+                  ? view.light_cdf[k_env]
+                  : static_cast<float>(k_env) / static_cast<float>(light_count(view));
+   }
+   if (others <= 0.0f) {
+      return {.ray = {{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}, .power = {0.0f, 0.0f, 0.0f}};
+   }
+   const LightChoice choice = pick_light(view, rng.next_float() * others);
    const std::uint32_t k = choice.index;
-   const float light_choice = 1.0f / choice.probability;
+   const float light_choice = others / choice.probability;
 
    if (k < view.emissive_triangle_count) {
       // Triangle émissif, selon une loi en cosinus, des deux côtés ou du côté de sa normale

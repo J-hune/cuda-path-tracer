@@ -6,20 +6,19 @@
 #include "core/texture.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
+#include "scene/environment_map.h"
 #include "scene/gltf_loader.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <numbers>
 #include <vector>
 
 namespace rt {
 
 namespace {
 
-constexpr float kPi = std::numbers::pi_v<float>;
 
 float luminance(Vec3 c) {
    return (0.2126f * c.x) + (0.7152f * c.y) + (0.0722f * c.z);
@@ -128,6 +127,14 @@ LightDistribution light_distribution(const Scene& scene) {
    }
    for (const PunctualLight& light : scene.punctual_lights) {
       powers.push_back(punctual_power(light, scene_radius));
+   }
+   // HDRI de luminance moyenne L : elle éclaire la sphère englobant la scène avec un éclairement
+   // π L, sur une aire 4π R²
+   if (!scene.environment_image.empty()) {
+      const EnvironmentImage& env = scene.environment_image;
+      powers.push_back(
+         4.0f * kPi * kPi * scene_radius * scene_radius * env.average_luminance * env.strength
+      );
    }
 
    LightDistribution distribution;

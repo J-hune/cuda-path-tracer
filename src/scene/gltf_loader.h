@@ -8,6 +8,7 @@
 #include "core/texture.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
+#include "scene/environment_map.h"
 
 #include <cstdint>
 #include <expected>
@@ -31,6 +32,7 @@ struct Scene {
    std::vector<Texture> textures;
    std::vector<Vec3> texels;
    Environment environment;
+   EnvironmentImage environment_image; // HDRI, vide si aucune
 };
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path);

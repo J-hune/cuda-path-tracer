@@ -86,6 +86,12 @@ public:
    void set_firefly_clamp(float max_contribution);
    [[nodiscard]] float firefly_clamp() const;
 
+   // HDRI : intensité et rotation autour de l'axe vertical (radians), puis repart de zéro
+   [[nodiscard]] bool has_environment_map() const;
+   void set_environment(float strength, float rotation);
+   [[nodiscard]] float environment_strength() const;
+   [[nodiscard]] float environment_rotation() const;
+
    // Caustiques par photons, puis repart de zéro
    void set_caustics(bool enabled);
    [[nodiscard]] bool caustics() const;

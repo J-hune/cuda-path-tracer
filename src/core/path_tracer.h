@@ -2,6 +2,7 @@
 
 #include "core/bsdf.h"
 #include "core/dielectric.h"
+#include "core/environment.h"
 #include "core/frame.h"
 #include "core/host_device.h"
 #include "core/light.h"
@@ -62,7 +63,19 @@ RT_HOST_DEVICE inline float power_heuristic(float a, float b) {
 // Nombre de lumières parmi lesquelles l'éclairage direct choisit : triangles émissifs et
 // ponctuelles
 RT_HOST_DEVICE constexpr std::uint32_t light_count(const SceneView& view) {
+   return view.emissive_triangle_count + view.punctual_light_count +
+          (view.environment_map.texels != nullptr ? 1u : 0u);
+}
+
+// Index de l'HDRI parmi les lumières (la dernière), si elle est présente
+RT_HOST_DEVICE constexpr std::uint32_t environment_light_index(const SceneView& view) {
    return view.emissive_triangle_count + view.punctual_light_count;
+}
+
+// Lumière venant de l'infini dans cette direction : l'HDRI, sinon le dégradé
+RT_HOST_DEVICE inline Vec3 sky_radiance(const SceneView& view, Vec3 direction) {
+   return view.environment_map.present() ? view.environment_map.radiance(direction)
+                                         : view.environment.radiance(direction);
 }
 
 struct LightChoice {
@@ -93,6 +106,14 @@ RT_HOST_DEVICE inline LightChoice pick_light(const SceneView& view, float u) {
       }
    }
    return {.index = low, .probability = view.light_cdf[low + 1] - view.light_cdf[low]};
+}
+
+// Probabilité que pick_light tire la lumière d'index k
+RT_HOST_DEVICE inline float light_probability(const SceneView& view, std::uint32_t k) {
+   if (view.light_cdf == nullptr) {
+      return 1.0f / static_cast<float>(light_count(view));
+   }
+   return view.light_cdf[k + 1] - view.light_cdf[k];
 }
 
 // Probabilité que pick_light tire le triangle émissif triangle
@@ -357,6 +378,43 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
    return f * irradiance * (cos_x * terminator / probability);
 }
 
+// Éclairage direct par l'HDRI : direction tirée selon sa luminance, pondérée par MIS face au tirage
+// de la BSDF
+RT_HOST_DEVICE inline Vec3 direct_from_environment(
+   SceneView view,
+   const ShadingPoint& shading,
+   float probability,
+   Pcg32& rng,
+   std::uint32_t& ray_count
+) {
+   const EnvironmentSample sample = view.environment_map.sample(
+      {rng.next_float(), rng.next_float()}
+   );
+   if (sample.pdf <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   const Vec3 wi = sample.direction;
+   const Vec3 n = shading.frame.normal;
+   const Vec3 n_g = shading.geometric_normal;
+   const float cos_x = dot(n, wi);
+   if (cos_x <= 0.0f || dot(n_g, wi) <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   if (max_component(f) <= 0.0f) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   ++ray_count;
+   if (intersects_before({shading.position + (n_g * kRayOffset), wi}, view, kInfinity)) {
+      return Vec3{0.0f, 0.0f, 0.0f};
+   }
+   const float pdf_light = probability * sample.pdf;
+   const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
+   const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
+   const float terminator = shadow_terminator(n_g, n, wi);
+   return f * view.environment_map.radiance(wi) * (cos_x * weight * terminator / pdf_light);
+}
+
 // Éclairage direct : choisit uniformément une lumière (triangle émissif ou ponctuelle).
 // ray_count est incrémenté du nombre de rayons lancés (le rayon d'ombre)
 RT_HOST_DEVICE inline Vec3 direct_light(
@@ -370,6 +428,9 @@ RT_HOST_DEVICE inline Vec3 direct_light(
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    const LightChoice light = pick_light(view, rng.next_float());
+   if (view.environment_map.present() && light.index == environment_light_index(view)) {
+      return direct_from_environment(view, shading, light.probability, rng, ray_count);
+   }
    if (light.index < view.emissive_triangle_count) {
       const std::uint32_t triangle = view.emissive_triangles[light.index];
       return direct_from_triangle(view, shading, triangle, light.probability, rng, ray_count);
@@ -514,11 +575,20 @@ RT_HOST_DEVICE inline bool trace_bounce(
    Hit hit{};
    ++ray_count;
    if (!intersect_scene(path.ray, view, hit)) {
+      const Vec3 sky = sky_radiance(view, path.ray.direction);
       if (path.bounce == 0 && first_hit != nullptr) {
-         *first_hit = {.albedo = view.environment.radiance(path.ray.direction)};
+         *first_hit = {.albedo = sky};
       }
-      const Vec3 sky = path.throughput * view.environment.radiance(path.ray.direction);
-      path.radiance += clamp_contribution(sky, max_contribution);
+      // L'HDRI est aussi tirée par l'éclairage direct : après un rebond de la BSDF, poids MIS
+      float weight = 1.0f;
+      if (view.environment_map.present() && path.bounce > 0 && !path.specular_bounce) {
+         const float pdf_light = light_probability(view, environment_light_index(view)) *
+                                 view.environment_map.pdf(path.ray.direction);
+         weight = pdf_light <= 0.0f ? 1.0f
+                  : view.use_mis    ? power_heuristic(path.bsdf_pdf, pdf_light)
+                                    : 0.0f;
+      }
+      path.radiance += clamp_contribution(path.throughput * sky * weight, max_contribution);
       return false;
    }
 

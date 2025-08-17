@@ -20,6 +20,7 @@
 #include "gpu/photon_map.h"
 #include "gpu/renderer.h"
 #include "scene/bvh_builder.h"
+#include "scene/environment_map.h"
 #include "scene/gltf_loader.h"
 #include "scene/light_distribution.h"
 #include "scene/photon_targets.h"
@@ -215,6 +216,16 @@ struct Renderer::Impl {
       texels.upload(scene.texels);
       photon_target_buffer = DeviceBuffer<rt::PhotonTarget>(photon_targets.size());
       photon_target_buffer.upload(photon_targets);
+      if (!scene.environment_image.empty()) {
+         const rt::EnvironmentImage& env = scene.environment_image;
+         environment_texels = DeviceBuffer<rt::Vec3>(env.texels.size());
+         environment_texels.upload(env.texels);
+         environment_marginal = DeviceBuffer<float>(env.marginal_cdf.size());
+         environment_marginal.upload(env.marginal_cdf);
+         environment_conditional = DeviceBuffer<float>(env.conditional_cdf.size());
+         environment_conditional.upload(env.conditional_cdf);
+         environment_settings = env.view();
+      }
       const rt::LightDistribution lights = rt::light_distribution(scene);
       light_cdf = DeviceBuffer<float>(lights.cdf.size());
       light_cdf.upload(lights.cdf);
@@ -232,6 +243,18 @@ struct Renderer::Impl {
       RT_CUDA_CHECK(cudaGetDevice(&device));
       RT_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
       resident_blocks = blocks_per_sm * sm_count;
+   }
+
+   // HDRI sur le GPU : réglages de l'image, pointeurs vers les tampons du GPU
+   [[nodiscard]] rt::EnvironmentMap environment_map() const {
+      if (environment_texels.size() == 0) {
+         return {};
+      }
+      rt::EnvironmentMap map = environment_settings;
+      map.texels = environment_texels.data();
+      map.marginal_cdf = environment_marginal.data();
+      map.conditional_cdf = environment_conditional.data();
+      return map;
    }
 
    [[nodiscard]] rt::SceneView view() const {
@@ -255,6 +278,7 @@ struct Renderer::Impl {
          .textures = textures.data(),
          .texels = texels.data(),
          .environment = environment,
+         .environment_map = environment_map(),
          .use_mis = use_mis,
          .firefly_clamp = firefly_clamp,
          .caustics = {},
@@ -296,6 +320,10 @@ struct Renderer::Impl {
    std::vector<rt::PhotonTarget> photon_targets;
    DeviceBuffer<rt::PhotonTarget> photon_target_buffer{0};
    DeviceBuffer<float> light_cdf{0};
+   DeviceBuffer<rt::Vec3> environment_texels{0};
+   DeviceBuffer<float> environment_marginal{0};
+   DeviceBuffer<float> environment_conditional{0};
+   rt::EnvironmentMap environment_settings;
    DeviceBuffer<std::int32_t> triangle_light{0};
    rt::Environment environment;
    bool use_mis = true;
@@ -422,6 +450,24 @@ Renderer::DisplayLayer Renderer::display_layer() const {
 void Renderer::reset() {
    impl_->sample_count = 0;
    impl_->denoised_sample_count = 0;
+}
+
+bool Renderer::has_environment_map() const {
+   return impl_->environment_texels.size() != 0;
+}
+
+void Renderer::set_environment(float strength, float rotation) {
+   impl_->environment_settings.strength = strength;
+   impl_->environment_settings.rotation = rotation;
+   reset();
+}
+
+float Renderer::environment_strength() const {
+   return impl_->environment_settings.strength;
+}
+
+float Renderer::environment_rotation() const {
+   return impl_->environment_settings.rotation;
 }
 
 void Renderer::set_caustics(bool enabled) {

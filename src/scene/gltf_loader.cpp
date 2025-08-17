@@ -6,6 +6,7 @@
 #include "core/material.h"
 #include "core/vec2.h"
 #include "core/vec3.h"
+#include "scene/environment_map.h"
 #include "scene/tangents.h"
 
 #include <cmath>
@@ -63,12 +64,45 @@ struct CameraLens {
 };
 using CameraLenses = std::unordered_map<std::size_t, CameraLens>;
 
-void parse_camera_extras(
+// HDRI de la scène, que glTF ne décrit pas non plus : propriétés personnalisées de la scène
+// raytracer_environment (chemin, relatif au fichier glTF), raytracer_environment_strength et
+// raytracer_environment_rotation (degrés, autour de l'axe vertical)
+struct SceneEnvironment {
+   std::string path;
+   float strength = 1.0f;
+   float rotation_degrees = 0.0f;
+};
+
+struct Extras {
+   CameraLenses lenses;
+   SceneEnvironment environment;
+};
+
+void parse_scene_extras(simdjson::dom::object* extras, SceneEnvironment& environment) {
+   std::string_view path;
+   if ((*extras)["raytracer_environment"].get_string().get(path) == simdjson::SUCCESS) {
+      environment.path = std::string(path);
+   }
+   double value = 0.0;
+   if ((*extras)["raytracer_environment_strength"].get_double().get(value) == simdjson::SUCCESS) {
+      environment.strength = static_cast<float>(value);
+   }
+   if ((*extras)["raytracer_environment_rotation"].get_double().get(value) == simdjson::SUCCESS) {
+      environment.rotation_degrees = static_cast<float>(value);
+   }
+}
+
+void parse_extras(
    simdjson::dom::object* extras,
    std::size_t index,
    fastgltf::Category category,
    void* user_pointer
 ) {
+   auto& parsed = *static_cast<Extras*>(user_pointer);
+   if (category == fastgltf::Category::Scenes) {
+      parse_scene_extras(extras, parsed.environment);
+      return;
+   }
    if (category != fastgltf::Category::Cameras) {
       return;
    }
@@ -80,12 +114,12 @@ void parse_camera_extras(
    if ((*extras)["raytracer_focus_distance"].get_double().get(value) == simdjson::SUCCESS) {
       lens.focus_distance = static_cast<float>(value);
    }
-   (*static_cast<CameraLenses*>(user_pointer))[index] = lens;
+   parsed.lenses[index] = lens;
 }
 
 std::expected<fastgltf::Asset, std::string> parse_file(
    const std::filesystem::path& path,
-   CameraLenses& lenses
+   Extras& extras
 ) {
    if (!std::filesystem::exists(path)) {
       return std::unexpected("GLTF file not found: " + path.string());
@@ -105,8 +139,8 @@ std::expected<fastgltf::Asset, std::string> parse_file(
                                 fastgltf::Extensions::KHR_materials_dispersion |
                                 fastgltf::Extensions::KHR_lights_punctual;
    fastgltf::Parser parser(kExtensions);
-   parser.setUserPointer(&lenses);
-   parser.setExtrasParseCallback(parse_camera_extras);
+   parser.setUserPointer(&extras);
+   parser.setExtrasParseCallback(parse_extras);
    auto asset = parser.loadGltf(
       data.get(),
       path.parent_path(),
@@ -521,8 +555,9 @@ std::expected<void, std::string> load_primitive(
 } // namespace
 
 std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
-   CameraLenses lenses;
-   auto parsed = parse_file(path, lenses);
+   Extras extras;
+   auto parsed = parse_file(path, extras);
+   const CameraLenses& lenses = extras.lenses;
    if (!parsed) {
       return std::unexpected(parsed.error());
    }
@@ -582,6 +617,18 @@ std::expected<Scene, std::string> load_gltf(const std::filesystem::path& path) {
 
    if (!error.empty()) {
       return std::unexpected(error);
+   }
+
+   if (!extras.environment.path.empty()) {
+      auto environment = load_environment(
+         path.parent_path() / extras.environment.path,
+         extras.environment.strength,
+         extras.environment.rotation_degrees * std::numbers::pi_v<float> / 180.0f
+      );
+      if (!environment) {
+         return std::unexpected(environment.error());
+      }
+      scene.environment_image = std::move(*environment);
    }
 
    // Triangles émissifs, tirés comme sources de lumière par l'éclairage direct
