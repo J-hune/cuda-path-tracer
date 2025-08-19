@@ -278,7 +278,53 @@ struct ShadingPoint {
    Frame frame;           // autour de la normale d'ombrage : BSDF
    Vec3 wo;
    SurfaceParams params;
+   // Verre dépoli : indice du milieu opposé sur celui de l'observateur. 0 : surface opaque
+   float eta = 0.0f;
 };
+
+// Valeur de la BSDF au point pour la direction locale wi. Le verre teinte la lumière réfractée.
+RT_HOST_DEVICE inline Vec3 shading_eval(const ShadingPoint& shading, Vec3 wi) {
+   if (shading.eta <= 0.0f) {
+      return principled::eval(shading.params, shading.wo, wi);
+   }
+   const float alpha = principled::alpha(shading.params.roughness);
+   const float f = rough_dielectric::eval(shading.wo, wi, alpha, shading.eta);
+   return wi.z < 0.0f ? shading.params.base_color * f : Vec3{f, f, f};
+}
+
+RT_HOST_DEVICE inline float shading_pdf(const ShadingPoint& shading, Vec3 wi) {
+   if (shading.eta <= 0.0f) {
+      return principled::pdf(shading.params, shading.wo, wi);
+   }
+   const float alpha = principled::alpha(shading.params.roughness);
+   return rough_dielectric::pdf(shading.wo, wi, alpha, shading.eta);
+}
+
+RT_HOST_DEVICE inline BsdfSample shading_sample(const ShadingPoint& shading, Pcg32& rng) {
+   const Vec2 u{rng.next_float(), rng.next_float()};
+   if (shading.eta <= 0.0f) {
+      return principled::sample(shading.params, shading.wo, u);
+   }
+   const float alpha = principled::alpha(shading.params.roughness);
+   BsdfSample
+      sample = rough_dielectric::sample(shading.wo, alpha, shading.eta, u, rng.next_float());
+   if (sample.wi.z < 0.0f) {
+      sample.weight = sample.weight * shading.params.base_color;
+   }
+   return sample;
+}
+
+// Origine d'un rayon qui part du point vers wi, décalée du côté de la surface où il part
+RT_HOST_DEVICE inline Vec3 ray_origin(const ShadingPoint& shading, Vec3 wi) {
+   const Vec3 n_g = shading.geometric_normal;
+   return shading.position + (n_g * (dot(n_g, wi) > 0.0f ? kRayOffset : -kRayOffset));
+}
+
+RT_HOST_DEVICE inline float shading_terminator(const ShadingPoint& shading, Vec3 wi) {
+   return shading.eta > 0.0f
+             ? 1.0f
+             : shadow_terminator(shading.geometric_normal, shading.frame.normal, wi);
+}
 
 // Éclairage direct par un triangle émissif, pondéré par MIS face au tirage de la BSDF
 RT_HOST_DEVICE inline Vec3 direct_from_triangle(
@@ -309,26 +355,27 @@ RT_HOST_DEVICE inline Vec3 direct_from_triangle(
    const float cos_x = dot(n, wi);
    // Une lampe à simple face n'éclaire que les points situés du côté de sa normale
    const float cos_y = material.double_sided ? std::fabs(dot(n_l, wi)) : -dot(n_l, wi);
-   if (cos_x <= 0.0f || cos_y <= 0.0f || dot(n_g, wi) <= 0.0f) {
+   // wi doit partir du même côté des surfaces géométrique et d'ombrage
+   if (cos_x * dot(n_g, wi) <= 0.0f || cos_y <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
-   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   const Vec3 f = shading_eval(shading, shading.frame.to_local(wi));
    if (max_component(f) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
-   if (is_occluded(view, x + (n_g * kRayOffset), y)) {
+   if (is_occluded(view, ray_origin(shading, wi), y)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
 
    // Densité du point tiré = probabilité du triangle / aire, ramenée en angle solide par d² / cos_y
    const float pdf_light = probability * d2 / (cos_y * area);
-   const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
+   const float bsdf_pdf = shading_pdf(shading, shading.frame.to_local(wi));
    const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
-   const float terminator = shadow_terminator(n_g, n, wi);
+   const float terminator = shading_terminator(shading, wi);
    const Vec3 emission = surface_emission(view, material, triangle_uv(view, triangle, b.x, b.y));
-   return f * emission * (cos_x * weight * terminator / pdf_light);
+   return f * emission * (std::fabs(cos_x) * weight * terminator / pdf_light);
 }
 
 // Éclairage direct par une lumière ponctuelle. Sans surface, elle ne peut pas être touchée par un
@@ -363,19 +410,19 @@ RT_HOST_DEVICE inline Vec3 direct_from_punctual(
    }
 
    const float cos_x = dot(n, wi);
-   if (cos_x <= 0.0f || dot(n_g, wi) <= 0.0f || max_component(irradiance) <= 0.0f) {
+   if (cos_x * dot(n_g, wi) <= 0.0f || max_component(irradiance) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
-   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   const Vec3 f = shading_eval(shading, shading.frame.to_local(wi));
    if (max_component(f) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
-   if (is_occluded(view, x + (n_g * kRayOffset), target)) {
+   if (is_occluded(view, ray_origin(shading, wi), target)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
-   const float terminator = shadow_terminator(n_g, n, wi);
-   return f * irradiance * (cos_x * terminator / probability);
+   const float terminator = shading_terminator(shading, wi);
+   return f * irradiance * (std::fabs(cos_x) * terminator / probability);
 }
 
 // Éclairage direct par l'HDRI : direction tirée selon sa luminance, pondérée par MIS face au tirage
@@ -397,22 +444,23 @@ RT_HOST_DEVICE inline Vec3 direct_from_environment(
    const Vec3 n = shading.frame.normal;
    const Vec3 n_g = shading.geometric_normal;
    const float cos_x = dot(n, wi);
-   if (cos_x <= 0.0f || dot(n_g, wi) <= 0.0f) {
+   if (cos_x * dot(n_g, wi) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
-   const Vec3 f = principled::eval(shading.params, shading.wo, shading.frame.to_local(wi));
+   const Vec3 f = shading_eval(shading, shading.frame.to_local(wi));
    if (max_component(f) <= 0.0f) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    ++ray_count;
-   if (intersects_before({shading.position + (n_g * kRayOffset), wi}, view, kInfinity)) {
+   if (intersects_before({ray_origin(shading, wi), wi}, view, kInfinity)) {
       return Vec3{0.0f, 0.0f, 0.0f};
    }
    const float pdf_light = probability * sample.pdf;
-   const float bsdf_pdf = principled::pdf(shading.params, shading.wo, shading.frame.to_local(wi));
+   const float bsdf_pdf = shading_pdf(shading, shading.frame.to_local(wi));
    const float weight = view.use_mis ? power_heuristic(pdf_light, bsdf_pdf) : 1.0f;
-   const float terminator = shadow_terminator(n_g, n, wi);
-   return f * view.environment_map.radiance(wi) * (cos_x * weight * terminator / pdf_light);
+   const float terminator = shading_terminator(shading, wi);
+   return f * view.environment_map.radiance(wi) *
+          (std::fabs(cos_x) * weight * terminator / pdf_light);
 }
 
 // Éclairage direct : choisit uniformément une lumière (triangle émissif ou ponctuelle).
@@ -439,15 +487,14 @@ RT_HOST_DEVICE inline Vec3 direct_light(
    return direct_from_punctual(view, shading, punctual, light.probability, ray_count);
 }
 
-// Réflexion ou réfraction sur une surface diélectrique lisse. Met à jour throughput (absorption
-// du volume traversé, couleur transmise) et renvoie le rayon suivant.
-// Verre dispersif : au premier passage, le chemin tire une longueur d'onde (wavelength, 0 tant
-// qu'aucune n'est choisie) et prend sa couleur ; l'indice dépend ensuite de cette longueur d'onde.
-RT_HOST_DEVICE inline Ray scatter_glass(
+// Indice de réfraction du verre pour ce chemin. Met à jour throughput avec l'absorption du volume
+// traversé. Verre dispersif : au premier passage, le chemin tire une longueur d'onde (wavelength, 0
+// tant qu'aucune n'est choisie) et prend sa couleur ; l'indice dépend ensuite de cette longueur
+// d'onde.
+RT_HOST_DEVICE inline float glass_ior(
    SceneView view,
    const Hit& hit,
    const Material& material,
-   Vec3 albedo,
    const Ray& ray,
    Pcg32& rng,
    Vec3& throughput,
@@ -461,11 +508,30 @@ RT_HOST_DEVICE inline Ray scatter_glass(
       }
       ior = dispersive_ior(material.ior, material.dispersion, wavelength);
    }
-   const Vec3 outward = geometric_normal(view, hit.triangle);
-   if (dot(ray.direction, outward) > 0.0f) {
+   if (dot(ray.direction, geometric_normal(view, hit.triangle)) > 0.0f) {
       // Le rayon sort de l'objet : il a traversé le volume sur une distance hit.t
       throughput = throughput * beer_lambert(material.absorption, hit.t);
    }
+   return ior;
+}
+
+// Verre assez rugueux pour ne plus être traité comme une interface lisse
+RT_HOST_DEVICE inline bool is_rough_glass(const SurfaceParams& params) {
+   return params.roughness * params.roughness > principled::kMinAlpha;
+}
+
+// Réflexion ou réfraction sur une surface diélectrique lisse. Met à jour throughput (couleur
+// transmise) et renvoie le rayon suivant.
+RT_HOST_DEVICE inline Ray scatter_smooth_glass(
+   SceneView view,
+   const Hit& hit,
+   float ior,
+   Vec3 albedo,
+   const Ray& ray,
+   Pcg32& rng,
+   Vec3& throughput
+) {
+   const Vec3 outward = geometric_normal(view, hit.triangle);
    const Vec3 outward_shading = shading_normal(view, hit, outward);
    const DielectricSample sample = sample_dielectric(ray.direction, outward_shading, ior, rng);
    if (sample.transmitted) {
@@ -475,7 +541,7 @@ RT_HOST_DEVICE inline Ray scatter_glass(
    return {ray.at(hit.t) + (side * kRayOffset), sample.direction};
 }
 
-// Point d'une surface opaque touché par le rayon, avec ses normales et ses paramètres de BSDF
+// Point de surface touché par le rayon, avec ses normales et ses paramètres de BSDF
 RT_HOST_DEVICE inline ShadingPoint make_shading_point(
    SceneView view,
    const Hit& hit,
@@ -496,6 +562,22 @@ RT_HOST_DEVICE inline ShadingPoint make_shading_point(
       .wo = frame.to_local(-ray.direction),
       .params = params,
    };
+}
+
+// Point de verre dépoli : ior est l'indice de l'objet
+RT_HOST_DEVICE inline ShadingPoint make_glass_point(
+   SceneView view,
+   const Hit& hit,
+   const Material& material,
+   const SurfaceParams& params,
+   Vec2 uv,
+   const Ray& ray,
+   float ior
+) {
+   ShadingPoint shading = make_shading_point(view, hit, material, params, uv, ray);
+   const bool entering = dot(ray.direction, geometric_normal(view, hit.triangle)) < 0.0f;
+   shading.eta = entering ? ior : 1.0f / ior;
+   return shading;
 }
 
 // Rugosité en dessous de laquelle un métal est traité comme un miroir par les photons
@@ -581,7 +663,8 @@ RT_HOST_DEVICE inline bool trace_bounce(
       }
       // L'HDRI est aussi tirée par l'éclairage direct : après un rebond de la BSDF, poids MIS
       float weight = 1.0f;
-      if (view.environment_map.present() && path.bounce > 0 && !path.specular_bounce) {
+      if (view.environment_map.present() && path.bounce > 0 && !path.specular_bounce &&
+          !path.caustic_path) {
          const float pdf_light = light_probability(view, environment_light_index(view)) *
                                  view.environment_map.pdf(path.ray.direction);
          weight = pdf_light <= 0.0f ? 1.0f
@@ -619,18 +702,29 @@ RT_HOST_DEVICE inline bool trace_bounce(
    }
 
    if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
-      // Surface diélectrique : réflexion ou réfraction, sans éclairage direct
-      path.ray = scatter_glass(
-         view,
-         hit,
-         material,
-         albedo,
-         path.ray,
-         rng,
-         path.throughput,
-         path.wavelength
-      );
-      path.specular_bounce = true;
+      const float
+         ior = glass_ior(view, hit, material, path.ray, rng, path.throughput, path.wavelength);
+      if (!is_rough_glass(params)) {
+         // Verre lisse : réflexion ou réfraction, sans éclairage direct
+         path.ray = scatter_smooth_glass(view, hit, ior, albedo, path.ray, rng, path.throughput);
+         path.specular_bounce = true;
+      } else {
+         const ShadingPoint
+            shading = make_glass_point(view, hit, material, params, uv, path.ray, ior);
+         if (!path.after_diffuse) {
+            const Vec3 direct = path.throughput * direct_light(view, shading, rng, ray_count);
+            path.radiance += clamp_contribution(direct, max_contribution);
+         }
+         const BsdfSample bsdf = shading_sample(shading, rng);
+         if (bsdf.pdf <= 0.0f) {
+            return false;
+         }
+         const Vec3 wi = shading.frame.to_world(bsdf.wi);
+         path.ray = {ray_origin(shading, wi), wi};
+         path.throughput = path.throughput * bsdf.weight;
+         path.bsdf_pdf = bsdf.pdf;
+         path.specular_bounce = false;
+      }
       path.caustic_path = path.after_diffuse;
    } else {
       // Surface opaque (glTF metallic-roughness) : éclairage direct, puis rebond selon la BSDF
@@ -654,11 +748,7 @@ RT_HOST_DEVICE inline bool trace_bounce(
       }
       path.caustic_path = glossy && path.after_diffuse;
 
-      const BsdfSample bsdf = principled::sample(
-         shading.params,
-         shading.wo,
-         {rng.next_float(), rng.next_float()}
-      );
+      const BsdfSample bsdf = shading_sample(shading, rng);
       const Vec3 wi = shading.frame.to_world(bsdf.wi);
       // Une direction sous la surface réelle ne peut pas repartir de ce côté
       if (bsdf.pdf <= 0.0f || dot(wi, n_g) <= 0.0f) {

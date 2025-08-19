@@ -214,14 +214,23 @@ RT_HOST_DEVICE inline bool trace_photon(
       const Vec3 albedo = params.base_color;
 
       if (material.transmission > 0.0f && rng.next_float() < material.transmission) {
-         ray = scatter_glass(view, hit, material, albedo, ray, rng, throughput, wavelength);
+         const float ior = glass_ior(view, hit, material, ray, rng, throughput, wavelength);
+         if (!is_rough_glass(params)) {
+            ray = scatter_smooth_glass(view, hit, ior, albedo, ray, rng, throughput);
+         } else {
+            const ShadingPoint
+               shading = make_glass_point(view, hit, material, params, uv, ray, ior);
+            const BsdfSample bsdf = shading_sample(shading, rng);
+            if (bsdf.pdf <= 0.0f) {
+               return false;
+            }
+            const Vec3 wi = shading.frame.to_world(bsdf.wi);
+            ray = {ray_origin(shading, wi), wi};
+            throughput = throughput * bsdf.weight;
+         }
       } else if (is_glossy_metal(material)) {
          const ShadingPoint shading = make_shading_point(view, hit, material, params, uv, ray);
-         const BsdfSample bsdf = principled::sample(
-            shading.params,
-            shading.wo,
-            {rng.next_float(), rng.next_float()}
-         );
+         const BsdfSample bsdf = shading_sample(shading, rng);
          const Vec3 wi = shading.frame.to_world(bsdf.wi);
          if (bsdf.pdf <= 0.0f || dot(wi, shading.geometric_normal) <= 0.0f) {
             return false;

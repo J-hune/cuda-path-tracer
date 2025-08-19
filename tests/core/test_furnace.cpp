@@ -156,13 +156,14 @@ TEST_CASE("four blanc : métal blanc rugueux", "[furnace]") {
    check_furnace({.base_color = {1, 1, 1}, .metallic = 1.0f, .roughness = 0.6f});
 }
 
-TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
-   // Le verre ne fait que réfléchir ou réfracter : sans absorption, il conserve toute l'énergie.
-   // Les rebonds internes et la roulette russe rendent chaque échantillon aléatoire :
-   // seule la moyenne doit valoir 1.
+namespace {
+
+// Moyenne de la lumière vue à travers un cube de verre, dans l'environnement uniforme de radiance 1
+double glass_cube_average(float roughness) {
    const rt::Scene scene = make_cube({
       .albedo = {1, 1, 1},
       .emission = {0, 0, 0},
+      .roughness = roughness,
       .transmission = 1.0f,
       .ior = 1.5f,
    });
@@ -192,8 +193,23 @@ TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
          }
       }
    }
+   return sum / count;
+}
 
-   CHECK_THAT(sum / count, Catch::Matchers::WithinAbs(1.0, 0.01));
+} // namespace
+
+TEST_CASE("four blanc : cube de verre invisible en moyenne", "[furnace]") {
+   // Le verre ne fait que réfléchir ou réfracter : sans absorption, il conserve toute l'énergie.
+   // Les rebonds internes et la roulette russe rendent chaque échantillon aléatoire :
+   // seule la moyenne doit valoir 1.
+   CHECK_THAT(glass_cube_average(0.0f), Catch::Matchers::WithinAbs(1.0, 0.01));
+}
+
+TEST_CASE("four blanc : un cube de verre peu dépoli ne crée pas de lumière", "[furnace]") {
+   // Une seule diffusion par microfacette : un peu d'énergie se perd, aucune n'est créée
+   const double average = glass_cube_average(0.15f);
+   CHECK(average <= 1.01);
+   CHECK(average > 0.95);
 }
 
 TEST_CASE("four blanc : une HDRI uniforme éclaire comme l'environnement uniforme", "[furnace]") {

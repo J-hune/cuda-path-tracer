@@ -22,6 +22,7 @@ add_executable(rt_tests
    core/test_camera.cpp
    core/test_color.cpp
    core/test_dielectric.cpp
+   core/test_rough_glass.cpp
    core/test_frame.cpp
    core/test_half.cpp
    core/test_furnace.cpp
