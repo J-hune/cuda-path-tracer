@@ -27,6 +27,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -44,6 +45,7 @@ constexpr int kAccumulateBlockSize = 256;
 constexpr float kInitialRadiusFraction = 0.002f; // de la diagonale de la scène
 constexpr float kInitialRadiusPixels = 1.5f;     // caustiques vues depuis la caméra
 constexpr float kRadiusAlpha = 2.0f / 3.0f;
+constexpr std::uint32_t kMinSlicePixels = 1u << 14;
 
 // Tampons d'accumulation : somme des échantillons de chaque pixel, pour chaque couche
 struct Accumulation {
@@ -52,9 +54,10 @@ struct Accumulation {
    rt::Vec3* normal; // dans le repère de la caméra
 };
 
-// Ajoute un échantillon par pixel (l'échantillon numéro sample_index) aux tampons d'accumulation.
-// Chaque thread prend un pixel libre, et en reprend un dès que son chemin est terminé : les threads
-// d'un warp restent occupés, au lieu d'attendre que le plus long chemin du warp se termine.
+// Ajoute l'échantillon numéro sample_index aux tampons d'accumulation, pour les pixels de
+// *next_pixel à pixel_end. Chaque thread prend un pixel libre, et en reprend un dès que son chemin
+// est terminé : les threads d'un warp restent occupés, au lieu d'attendre que le plus long chemin
+// du warp se termine.
 __global__ void accumulate_kernel(
    rt::Camera camera,
    rt::SceneView view,
@@ -62,10 +65,9 @@ __global__ void accumulate_kernel(
    std::uint32_t sample_index,
    unsigned long long* ray_counter,
    std::uint32_t* next_pixel,
-   int width,
-   int height
+   std::uint32_t pixel_end,
+   int width
 ) {
-   const auto pixel_count = static_cast<std::uint32_t>(width * height);
    std::uint32_t ray_count = 0;
    std::uint32_t pixel = 0;
    rt::Pcg32 rng(0, 0);
@@ -76,7 +78,7 @@ __global__ void accumulate_kernel(
    while (true) {
       if (!active) {
          pixel = atomicAdd(next_pixel, 1u);
-         if (pixel >= pixel_count) {
+         if (pixel >= pixel_end) {
             break;
          }
          const std::uint32_t row = pixel / static_cast<std::uint32_t>(width);
@@ -356,6 +358,13 @@ struct Renderer::Impl {
    std::optional<Denoising> denoising;
    std::uint32_t denoised_sample_count = 0; // 0 : pas d'image débruitée depuis le reset
 
+   // Échantillon en cours, tracé par tranches de pixels
+   std::uint32_t next_slice = 0; // premier pixel de la prochaine tranche
+   std::uint32_t slice_pixels = 1u << 16;
+   rt::SceneView sample_view; // vue de l'échantillon en cours, avec sa carte de photons
+   FrameStats current_sample; // cumul des tranches de l'échantillon en cours
+   FrameStats last_slice;
+
    [[nodiscard]] Accumulation sums() {
       return {.color = accumulation.data(), .albedo = albedo.data(), .normal = normal.data()};
    }
@@ -384,6 +393,107 @@ struct Renderer::Impl {
          denoising->output.data()
       );
       denoised_sample_count = sample_count;
+   }
+
+   [[nodiscard]] bool shows_denoised() const {
+      return denoise && display_layer == DisplayLayer::Color;
+   }
+
+   // Vue de la scène pour le nouvel échantillon, avec la carte de photons de cette passe
+   void begin_sample(const rt::Camera& camera) {
+      if (sample_count == 0) {
+         accumulated = {};
+      }
+      sample_view = view();
+      if (!caustics) {
+         return;
+      }
+      if (sample_count == 0) {
+         photon_radius2 = initial_photon_radius * initial_photon_radius;
+      } else {
+         const auto pass = static_cast<float>(sample_count);
+         photon_radius2 *= (pass + kRadiusAlpha) / (pass + 1.0f);
+      }
+      if (!photon_map) {
+         photon_map.emplace(kPhotonsPerPass);
+      }
+      photon_map->build(sample_view, sample_count, std::sqrt(photon_radius2));
+      sample_view.caustics = photon_map->view();
+      const float shrink = std::sqrt(photon_radius2) / initial_photon_radius;
+      sample_view.caustics.radius_per_distance = kInitialRadiusPixels * camera.pixel_angle() *
+                                                 shrink;
+   }
+
+   // Trace au plus count pixels de l'échantillon en cours. Renvoie vrai s'il est terminé.
+   bool trace(const rt::Camera& camera, std::uint32_t count) {
+      if (next_slice == 0) {
+         begin_sample(camera);
+      }
+      const auto pixel_count = static_cast<std::uint32_t>(width * height);
+      const std::uint32_t end = pixel_count - next_slice <= count ? pixel_count
+                                                                  : next_slice + count;
+      RT_CUDA_CHECK(cudaMemset(ray_counter.data(), 0, sizeof(unsigned long long)));
+      RT_CUDA_CHECK(
+         cudaMemcpy(next_pixel.data(), &next_slice, sizeof(std::uint32_t), cudaMemcpyHostToDevice)
+      );
+      timer.start();
+      accumulate_kernel<<<resident_blocks, kAccumulateBlockSize>>>(
+         camera,
+         sample_view,
+         sums(),
+         sample_count,
+         ray_counter.data(),
+         next_pixel.data(),
+         end,
+         width
+      );
+      RT_CUDA_CHECK_LAUNCH();
+      timer.stop();
+
+      std::vector<unsigned long long> rays(1);
+      ray_counter.download(rays);
+      last_slice = {.milliseconds = timer.elapsed_milliseconds(), .rays = rays[0]};
+      current_sample.milliseconds += last_slice.milliseconds;
+      current_sample.rays += last_slice.rays;
+      accumulated.milliseconds += last_slice.milliseconds;
+      accumulated.rays += last_slice.rays;
+      next_slice = end;
+      if (end < pixel_count) {
+         return false;
+      }
+
+      next_slice = 0;
+      ++sample_count;
+      last_frame = current_sample;
+      current_sample = {};
+      if (shows_denoised() && (denoised_sample_count == 0 || is_denoising_step(sample_count))) {
+         run_denoiser();
+      }
+      encode();
+      return true;
+   }
+
+   // Écrit la couche affichée dans le pixel buffer
+   void encode() {
+      if (!pixel_buffer || sample_count == 0) {
+         return;
+      }
+      const int pixel_count = width * height;
+      const GlPixelBuffer::Mapping mapping = pixel_buffer->map();
+      const bool denoised = shows_denoised() && denoised_sample_count > 0;
+      const rt::Vec3* layer = denoised                                ? denoising->output.data()
+                              : display_layer == DisplayLayer::Albedo ? albedo.data()
+                              : display_layer == DisplayLayer::Normal ? normal.data()
+                                                                      : accumulation.data();
+      encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
+         layer,
+         display_layer,
+         display,
+         denoised ? 1.0f : 1.0f / static_cast<float>(sample_count),
+         mapping.pixels(),
+         pixel_count
+      );
+      RT_CUDA_CHECK_LAUNCH();
    }
 };
 
@@ -450,6 +560,8 @@ Renderer::DisplayLayer Renderer::display_layer() const {
 void Renderer::reset() {
    impl_->sample_count = 0;
    impl_->denoised_sample_count = 0;
+   impl_->next_slice = 0;
+   impl_->current_sample = {};
 }
 
 bool Renderer::has_environment_map() const {
@@ -551,72 +663,34 @@ Renderer::DeviceInfo Renderer::device_info() {
 }
 
 void Renderer::render(const rt::Camera& camera) {
+   impl_->trace(camera, static_cast<std::uint32_t>(impl_->width * impl_->height));
+}
+
+bool Renderer::render_for(const rt::Camera& camera, float milliseconds) {
    Impl& impl = *impl_;
-   RT_CUDA_CHECK(cudaMemset(impl.ray_counter.data(), 0, sizeof(unsigned long long)));
-   RT_CUDA_CHECK(cudaMemset(impl.next_pixel.data(), 0, sizeof(std::uint32_t)));
-   rt::SceneView view = impl.view();
-   if (impl.caustics) {
-      if (impl.sample_count == 0) {
-         impl.photon_radius2 = impl.initial_photon_radius * impl.initial_photon_radius;
-      } else {
-         const auto pass = static_cast<float>(impl.sample_count);
-         impl.photon_radius2 *= (pass + kRadiusAlpha) / (pass + 1.0f);
-      }
-      if (!impl.photon_map) {
-         impl.photon_map.emplace(kPhotonsPerPass);
-      }
-      impl.photon_map->build(view, impl.sample_count, std::sqrt(impl.photon_radius2));
-      view.caustics = impl.photon_map->view();
-      const float shrink = std::sqrt(impl.photon_radius2) / impl.initial_photon_radius;
-      view.caustics.radius_per_distance = kInitialRadiusPixels * camera.pixel_angle() * shrink;
+   const bool finished = impl.trace(camera, impl.slice_pixels);
+   // Tranche suivante proportionnelle au temps visé, d'après la vitesse de celle-ci. Elle grandit
+   // prudemment : une zone de ciel rapide peut précéder une zone coûteuse.
+   const auto pixel_count = static_cast<std::uint32_t>(impl.width * impl.height);
+   if (impl.last_slice.milliseconds > 0.0f) {
+      const double current = impl.slice_pixels;
+      const double ideal = current * milliseconds / impl.last_slice.milliseconds;
+      impl.slice_pixels = static_cast<std::uint32_t>(std::clamp(
+         std::min(ideal, 1.5 * current),
+         static_cast<double>(kMinSlicePixels),
+         static_cast<double>(pixel_count)
+      ));
    }
+   return finished;
+}
 
-   impl.timer.start();
-   accumulate_kernel<<<impl.resident_blocks, kAccumulateBlockSize>>>(
-      camera,
-      view,
-      impl.sums(),
-      impl.sample_count,
-      impl.ray_counter.data(),
-      impl.next_pixel.data(),
-      impl.width,
-      impl.height
-   );
-   RT_CUDA_CHECK_LAUNCH();
-   impl.timer.stop();
-   ++impl.sample_count;
-
-   std::vector<unsigned long long> rays(1);
-   impl.ray_counter.download(rays);
-   impl.last_frame = {.milliseconds = impl.timer.elapsed_milliseconds(), .rays = rays[0]};
-   if (impl.sample_count == 1) {
-      impl.accumulated = {};
+void Renderer::refresh_display() {
+   Impl& impl = *impl_;
+   if (impl.sample_count == 0) {
+      return;
    }
-   impl.accumulated.milliseconds += impl.last_frame.milliseconds;
-   impl.accumulated.rays += impl.last_frame.rays;
-
-   const bool show_denoised = impl.denoise && impl.display_layer == DisplayLayer::Color;
-   if (show_denoised && (impl.denoised_sample_count == 0 || is_denoising_step(impl.sample_count))) {
+   if (impl.shows_denoised() && impl.denoised_sample_count != impl.sample_count) {
       impl.run_denoiser();
    }
-
-   if (impl.pixel_buffer) {
-      const int pixel_count = impl.width * impl.height;
-      const GlPixelBuffer::Mapping mapping = impl.pixel_buffer->map();
-      const bool denoised = show_denoised && impl.denoised_sample_count > 0;
-      const rt::Vec3* layer = denoised ? impl.denoising->output.data()
-                              : impl.display_layer == DisplayLayer::Albedo ? impl.albedo.data()
-                              : impl.display_layer == DisplayLayer::Normal
-                                 ? impl.normal.data()
-                                 : impl.accumulation.data();
-      encode_kernel<<<(pixel_count + 255) / 256, 256>>>(
-         layer,
-         impl.display_layer,
-         impl.display,
-         denoised ? 1.0f : 1.0f / static_cast<float>(impl.sample_count),
-         mapping.pixels(),
-         pixel_count
-      );
-      RT_CUDA_CHECK_LAUNCH();
-   }
+   impl.encode();
 }

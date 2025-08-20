@@ -21,9 +21,9 @@ struct CursorPosition {
    double y = 0.0;
 };
 
-// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8 de taille fixe et l'interface
-// ImGui par-dessus. L'image est lue dans un pixel buffer OpenGL, que CUDA peut remplir directement.
-// Une seule fenêtre par programme : elle initialise et termine GLFW et ImGui.
+// Fenêtre GLFW avec contexte OpenGL, qui affiche une image RGBA8, mise à l'échelle de la fenêtre,
+// et l'interface ImGui par-dessus. L'image est lue dans un pixel buffer OpenGL, que CUDA peut
+// remplir directement. Une seule fenêtre par programme : elle initialise et termine GLFW et ImGui.
 class Window {
 public:
    static std::expected<Window, std::string> create(

@@ -66,6 +66,13 @@ public:
 
    // Ajoute un échantillon par pixel, puis écrit la moyenne accumulée dans le pixel buffer
    void render(const rt::Camera& camera);
+   // Avance l'échantillon en cours pendant environ milliseconds (temps GPU), par tranches de
+   // pixels : l'interface reste fluide même quand un échantillon complet prend des secondes.
+   // Renvoie vrai quand l'échantillon est terminé et affiché. La caméra ne doit pas changer en
+   // cours d'échantillon.
+   bool render_for(const rt::Camera& camera, float milliseconds);
+   // Réécrit l'image affichée sans ajouter d'échantillon (réglages d'affichage, débruitage)
+   void refresh_display();
 
    // Repart de zéro (à appeler quand la caméra ou la scène change)
    void reset();

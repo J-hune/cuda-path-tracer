@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include <GLFW/glfw3.h>
+#include <cmath>
 #include <expected>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -157,23 +158,34 @@ void Window::present() {
    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
-   // La ligne 0 de l'image est en haut, celle d'OpenGL en bas : la copie retourne l'image
+   // Image centrée et mise à l'échelle de la fenêtre sans déformation. La ligne 0 de l'image est
+   // en haut, celle d'OpenGL en bas : la copie retourne l'image.
    int framebuffer_width = 0;
    int framebuffer_height = 0;
    glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
-   glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
+   const float scale = std::fmin(
+      static_cast<float>(framebuffer_width) / static_cast<float>(width_),
+      static_cast<float>(framebuffer_height) / static_cast<float>(height_)
+   );
+   const auto shown_width = static_cast<int>(std::lround(static_cast<float>(width_) * scale));
+   const auto shown_height = static_cast<int>(std::lround(static_cast<float>(height_) * scale));
+   const int left = (framebuffer_width - shown_width) / 2;
+   const int bottom = (framebuffer_height - shown_height) / 2;
    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+   glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
+   glClear(GL_COLOR_BUFFER_BIT);
+   glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_);
    glBlitFramebuffer(
       0,
       0,
       width_,
       height_,
-      0,
-      framebuffer_height,
-      framebuffer_width,
-      0,
+      left,
+      bottom + shown_height,
+      left + shown_width,
+      bottom,
       GL_COLOR_BUFFER_BIT,
-      GL_NEAREST
+      shown_width == width_ ? GL_NEAREST : GL_LINEAR
    );
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
