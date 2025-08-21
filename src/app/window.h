@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <string>
 
 struct GLFWwindow;
@@ -63,13 +64,24 @@ public:
    [[nodiscard]] bool is_down(Key key) const;
    [[nodiscard]] bool is_looking() const; // clic droit maintenu hors de l'interface
    [[nodiscard]] CursorPosition cursor_position() const;
+   // Position du curseur en pixels de l'image affichée, rien s'il est en dehors
+   [[nodiscard]] std::optional<CursorPosition> cursor_in_image() const;
    void close();
 
    // Temps écoulé depuis l'initialisation, en secondes
    [[nodiscard]] static double time();
 
 private:
+   // Rectangle où l'image est affichée, en pixels du framebuffer depuis le coin supérieur gauche
+   struct Viewport {
+      int left = 0;
+      int top = 0;
+      int width = 0;
+      int height = 0;
+   };
+
    Window(GLFWwindow* window, int width, int height);
+   [[nodiscard]] Viewport image_viewport() const;
 
    GLFWwindow* window_ = nullptr;
    unsigned int texture_ = 0;

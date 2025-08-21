@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace {
 
@@ -36,8 +37,17 @@ void FlyCamera::move(rt::Vec3 local_offset) {
 }
 
 void FlyCamera::rotate(float delta_yaw, float delta_pitch) {
-   yaw_ += delta_yaw;
-   pitch_ = std::clamp(pitch_ + delta_pitch, -kMaxPitch, kMaxPitch);
+   set_orientation(yaw_ + delta_yaw, pitch_ + delta_pitch);
+}
+
+// Lacet ramené dans [-π, π]
+void FlyCamera::set_orientation(float yaw, float pitch) {
+   yaw_ = std::remainder(yaw, 2.0f * std::numbers::pi_v<float>);
+   pitch_ = std::clamp(pitch, -kMaxPitch, kMaxPitch);
+}
+
+float FlyCamera::max_pitch() {
+   return kMaxPitch;
 }
 
 rt::CameraSettings FlyCamera::settings() const {

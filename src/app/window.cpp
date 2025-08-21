@@ -11,6 +11,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -160,17 +161,7 @@ void Window::present() {
 
    // Image centrée et mise à l'échelle de la fenêtre sans déformation. La ligne 0 de l'image est
    // en haut, celle d'OpenGL en bas : la copie retourne l'image.
-   int framebuffer_width = 0;
-   int framebuffer_height = 0;
-   glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
-   const float scale = std::fmin(
-      static_cast<float>(framebuffer_width) / static_cast<float>(width_),
-      static_cast<float>(framebuffer_height) / static_cast<float>(height_)
-   );
-   const auto shown_width = static_cast<int>(std::lround(static_cast<float>(width_) * scale));
-   const auto shown_height = static_cast<int>(std::lround(static_cast<float>(height_) * scale));
-   const int left = (framebuffer_width - shown_width) / 2;
-   const int bottom = (framebuffer_height - shown_height) / 2;
+   const Viewport shown = image_viewport();
    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
    glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
    glClear(GL_COLOR_BUFFER_BIT);
@@ -180,12 +171,12 @@ void Window::present() {
       0,
       width_,
       height_,
-      left,
-      bottom + shown_height,
-      left + shown_width,
-      bottom,
+      shown.left,
+      shown.top + shown.height,
+      shown.left + shown.width,
+      shown.top,
       GL_COLOR_BUFFER_BIT,
-      shown_width == width_ ? GL_NEAREST : GL_LINEAR
+      shown.width == width_ ? GL_NEAREST : GL_LINEAR
    );
    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
@@ -208,6 +199,44 @@ CursorPosition Window::cursor_position() const {
    CursorPosition position;
    glfwGetCursorPos(window_, &position.x, &position.y);
    return position;
+}
+
+Window::Viewport Window::image_viewport() const {
+   const Size framebuffer = framebuffer_size();
+   const float scale = std::fmin(
+      static_cast<float>(framebuffer.width) / static_cast<float>(width_),
+      static_cast<float>(framebuffer.height) / static_cast<float>(height_)
+   );
+   const auto width = static_cast<int>(std::lround(static_cast<float>(width_) * scale));
+   const auto height = static_cast<int>(std::lround(static_cast<float>(height_) * scale));
+   return {
+      .left = (framebuffer.width - width) / 2,
+      .top = (framebuffer.height - height) / 2,
+      .width = width,
+      .height = height,
+   };
+}
+
+std::optional<CursorPosition> Window::cursor_in_image() const {
+   // Le curseur est en coordonnées de la fenêtre, l'image en pixels du framebuffer
+   int window_width = 0;
+   int window_height = 0;
+   glfwGetWindowSize(window_, &window_width, &window_height);
+   if (window_width == 0 || window_height == 0) {
+      return std::nullopt;
+   }
+   const Size framebuffer = framebuffer_size();
+   const CursorPosition cursor = cursor_position();
+   const Viewport shown = image_viewport();
+   const double x = (cursor.x * framebuffer.width / window_width) - shown.left;
+   const double y = (cursor.y * framebuffer.height / window_height) - shown.top;
+   if (x < 0.0 || y < 0.0 || x >= shown.width || y >= shown.height) {
+      return std::nullopt;
+   }
+   return CursorPosition{
+      .x = x * width_ / shown.width,
+      .y = y * height_ / shown.height,
+   };
 }
 
 void Window::close() {

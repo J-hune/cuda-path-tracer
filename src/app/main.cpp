@@ -2,6 +2,7 @@
 #include "app/fly_camera.h"
 #include "app/image_io.h"
 #include "app/manifest.h"
+#include "app/ui.h"
 #include "app/window.h"
 #include "core/aabb.h"
 #include "core/camera.h"
@@ -22,6 +23,7 @@
 #include <format>
 #include <imgui.h>
 #include <iostream>
+#include <optional>
 #include <ratio>
 #include <string>
 #include <string_view>
@@ -31,8 +33,8 @@
 namespace {
 
 constexpr float kMouseSensitivity = 0.003f; // radians par pixel
-// Temps GPU du rendu final à chaque image de l'interface
-constexpr float kFinalRenderSliceMilliseconds = 30.0f;
+// Temps GPU de rendu à chaque image de l'interface
+constexpr float kSliceMilliseconds = 30.0f;
 
 // Longueur de la diagonale de la boîte englobant la scène
 float scene_extent(const rt::Scene& scene) {
@@ -54,14 +56,6 @@ rt::Vec3 movement_direction(const Window& window) {
    direction.y -= window.is_down(Key::Down) ? 1.0f : 0.0f;
    return direction;
 }
-
-// État de l'interface qui n'appartient pas au renderer
-struct Controls {
-   float firefly_threshold = rt::kDefaultFireflyClamp;
-   bool export_requested = false;
-   std::string status; // résultat du dernier export
-   FinalRender final_render;
-};
 
 std::string tone_mapping_name(rt::ToneMapping tone_mapping) {
    switch (tone_mapping) {
@@ -145,46 +139,17 @@ std::string export_render(
    return ok ? std::format("Exporté : {}", base) : std::format("Échec de l'export de {}", base);
 }
 
-// Réglages de la lentille. Renvoie vrai s'ils ont changé.
-bool draw_lens_settings(FlyCamera& fly_camera) {
-   const rt::CameraSettings settings = fly_camera.settings();
-   float aperture = settings.aperture_radius;
-   float focus = settings.focus_distance;
-   ImGui::SeparatorText("Caméra");
-   bool changed = ImGui::SliderFloat(
-      "Aperture",
-      &aperture,
-      0.0f,
-      1.0f,
-      "%.3f",
-      ImGuiSliderFlags_Logarithmic
-   );
-   changed |= ImGui::SliderFloat(
-      "Focus",
-      &focus,
-      0.1f,
-      100.0f,
-      "%.2f",
-      ImGuiSliderFlags_Logarithmic
-   );
-   ImGui::TextUnformatted("Clic gauche : focus sur l'objet");
-   if (changed) {
-      fly_camera.set_lens(aperture, focus);
-   }
-   return changed;
-}
-
-// Mise au point sur l'objet sous le curseur : distance du point touché le long de l'axe de visée
-void focus_on_cursor(
+// Mise au point sur l'objet au pixel (x, y) de l'image : distance du point touché le long de l'axe
+// de visée
+void focus_on_pixel(
    FlyCamera& fly_camera,
    const rt::Camera& camera,
    const rt::SceneView& scene,
-   CursorPosition cursor
+   CursorPosition pixel
 ) {
-   const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
    const rt::Ray ray = camera.generate_ray(
-      static_cast<float>(cursor.x) * scale.x,
-      static_cast<float>(cursor.y) * scale.y
+      static_cast<float>(pixel.x),
+      static_cast<float>(pixel.y)
    );
    rt::Hit hit{};
    if (!rt::intersect_scene(ray, scene, hit)) {
@@ -195,161 +160,16 @@ void focus_on_cursor(
    fly_camera.set_lens(settings.aperture_radius, hit.t * rt::dot(ray.direction, forward));
 }
 
-struct PanelResult {
-   bool lens_changed = false;
-   FinalRender::Action final_render = FinalRender::Action::None;
-};
-
-// Panneau de l'interface. window_size : taille de l'aperçu interactif.
-PanelResult draw_panel(
-   Renderer& renderer,
-   Controls& controls,
-   FlyCamera& fly_camera,
-   Size image_size,
-   Size window_size
-) {
-   ImGui::SetNextWindowPos({10.0f, 10.0f}, ImGuiCond_FirstUseEver);
-   ImGui::Begin("Rendu", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-
-   const ImGuiIO& io = ImGui::GetIO();
-   const Renderer::AccumulatedStats accumulated = renderer.accumulated();
-   const double mrays_per_second = accumulated.milliseconds > 0.0
-                                      ? static_cast<double>(accumulated.rays) /
-                                           (accumulated.milliseconds * 1e3)
-                                      : 0.0;
-   ImGui::Text("%.0f FPS (%.1f ms)", io.Framerate, 1000.0f / io.Framerate);
-   ImGui::Text("%d × %d pixels", image_size.width, image_size.height);
-   ImGui::Text("%u spp", renderer.sample_count());
-   ImGui::Text("%.0f Mrays/s", mrays_per_second);
-
-   // Pendant le rendu final, seuls l'affichage et le débruitage restent modifiables
-   const bool locked = controls.final_render.locked();
-   ImGui::SeparatorText("Réglages");
-   ImGui::BeginDisabled(locked);
-   bool mis = renderer.mis();
-   if (ImGui::Checkbox("MIS (M)", &mis)) {
-      renderer.set_mis(mis);
-   }
-   bool clamp = renderer.firefly_clamp() > 0.0f;
-   if (ImGui::Checkbox("Firefly clamp", &clamp)) {
-      renderer.set_firefly_clamp(clamp ? controls.firefly_threshold : 0.0f);
-   }
-   if (clamp && ImGui::SliderFloat(
-                   "Seuil",
-                   &controls.firefly_threshold,
-                   1.0f,
-                   100.0f,
-                   "%.1f",
-                   ImGuiSliderFlags_Logarithmic
-                )) {
-      renderer.set_firefly_clamp(controls.firefly_threshold);
-   }
-   bool caustics = renderer.caustics();
-   if (ImGui::Checkbox("Caustiques (photons)", &caustics)) {
-      renderer.set_caustics(caustics);
-   }
-   ImGui::EndDisabled();
-   bool denoise = renderer.denoiser();
-   if (ImGui::Checkbox("Denoiser OptiX", &denoise)) {
-      renderer.set_denoiser(denoise);
-   }
-   int layer = static_cast<int>(renderer.display_layer());
-   if (ImGui::Combo("AOV", &layer, "Beauty\0Albedo\0Normal\0")) {
-      renderer.set_display_layer(static_cast<Renderer::DisplayLayer>(layer));
-   }
-
-   ImGui::BeginDisabled(locked);
-   const bool lens_changed = draw_lens_settings(fly_camera);
-
-   if (renderer.has_environment_map()) {
-      ImGui::SeparatorText("Environnement");
-      float strength = renderer.environment_strength();
-      float rotation_degrees = renderer.environment_rotation() * 180.0f / rt::kPi;
-      bool changed = ImGui::SliderFloat(
-         "Intensité",
-         &strength,
-         0.0f,
-         10.0f,
-         "%.2f",
-         ImGuiSliderFlags_Logarithmic
-      );
-      changed |= ImGui::SliderFloat("Rotation", &rotation_degrees, -180.0f, 180.0f, "%.0f°");
-      if (changed) {
-         renderer.set_environment(strength, rotation_degrees * rt::kPi / 180.0f);
-      }
-   }
-   ImGui::EndDisabled();
-
-   ImGui::SeparatorText("Affichage");
-   rt::DisplaySettings display = renderer.display();
-   int tone_mapping = static_cast<int>(display.tone_mapping);
-   bool display_changed = ImGui::Combo("Tone mapping", &tone_mapping, "AgX\0ACES\0Standard\0");
-   display_changed |= ImGui::SliderFloat(
-      "Exposition (EV)",
-      &display.exposure,
-      -10.0f,
-      10.0f,
-      "%.1f"
-   );
-   if (display_changed) {
-      display.tone_mapping = static_cast<rt::ToneMapping>(tone_mapping);
-      renderer.set_display(display);
-   }
-
-   const FinalRender::Action action = draw_final_render(
-      controls.final_render,
-      renderer.sample_count(),
-      window_size,
-      Window::time(),
-      controls.status
-   );
-
-   // Pendant le rendu final, l'export se fait depuis sa section
-   if (!locked) {
-      ImGui::SeparatorText("Export");
-      if (ImGui::Button("Exporter (P)")) {
-         controls.export_requested = true;
-      }
-      if (!controls.status.empty()) {
-         ImGui::TextUnformatted(controls.status.c_str());
-      }
-   }
-
-   ImGui::SeparatorText("Commandes");
-   if (locked) {
-      ImGui::TextDisabled("Caméra figée pendant le rendu final");
-   } else {
-      ImGui::TextUnformatted(
-         "ZQSD : se déplacer\n"
-         "Espace, Ctrl : monter, descendre\n"
-         "Maj : plus vite\n"
-         "Clic droit : regarder\n"
-         "Échap : quitter"
-      );
-   }
-   ImGui::End();
-   return {.lens_changed = lens_changed, .final_render = action};
-}
-
 // Raccourcis selon la lettre imprimée sur la touche : ImGui traduit les touches GLFW selon la
 // disposition du clavier
-void handle_shortcuts(Window& window, Renderer& renderer, Controls& controls) {
-   if (ImGui::GetIO().WantCaptureKeyboard) {
-      return;
-   }
+void handle_shortcuts(Window& window, Interface& ui, bool& export_requested) {
    const auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
-   const FinalRender::State state = controls.final_render.state;
+   const FinalRender::State state = ui.final_render.state;
    if (pressed(ImGuiKey_P) && state != FinalRender::State::Running) {
-      controls.export_requested = true;
+      export_requested = true;
    }
-   if (state != FinalRender::State::Off) {
-      return;
-   }
-   if (pressed(ImGuiKey_Escape)) {
+   if (pressed(ImGuiKey_Escape) && state == FinalRender::State::Off) {
       window.close();
-   }
-   if (pressed(ImGuiKey_M)) {
-      renderer.set_mis(!renderer.mis());
    }
 }
 
@@ -416,18 +236,28 @@ int main(int argc, char** argv) {
    renderer.attach_pixel_buffer(window->pixel_buffer());
 
    const rt::SceneView host_scene = rt::host_view(*scene, bvh);
-   FlyCamera fly_camera(scene->camera.value_or(rt::CameraSettings{}));
+   const rt::CameraSettings initial_camera = scene->camera.value_or(rt::CameraSettings{});
+   FlyCamera fly_camera(initial_camera);
    rt::Camera camera(fly_camera.settings(), kWidth, kHeight);
-   // Vitesse de déplacement proportionnelle à la taille de la scène
-   const float move_speed = 0.25f * scene_extent(*scene);
 
+   Interface ui;
+   ui.scene_extent = scene_extent(*scene);
+   ui.move_speed = 0.25f * ui.scene_extent;
+   FinalRender& final_render = ui.final_render;
    double last_time = Window::time();
-   Controls controls;
-   FinalRender& final_render = controls.final_render;
    CursorPosition last_cursor = window->cursor_position();
 
+   // L'enregistrement CUDA doit être libéré avant qu'OpenGL ne réalloue le pixel buffer, puis
+   // refait sur le nouveau
+   const auto resize_image = [&](Size size) {
+      renderer.detach_pixel_buffer();
+      window->resize_image(size);
+      renderer.resize(size.width, size.height);
+      renderer.attach_pixel_buffer(window->pixel_buffer());
+      camera = rt::Camera(fly_camera.settings(), size.width, size.height);
+   };
    const auto export_image = [&] {
-      controls.status = export_render(
+      ui.status = export_render(
          renderer,
          device,
          scene_path,
@@ -437,28 +267,13 @@ int main(int argc, char** argv) {
       );
       final_render.exported = final_render.state == FinalRender::State::Finished;
    };
-   // Le rendu final remplace l'aperçu : l'image prend sa taille, la caméra est figée
-   const auto start_final_render = [&] {
-      final_render.size = final_render.chosen_size(window->image_size());
-      final_render.state = FinalRender::State::Running;
-      final_render.start_time = Window::time();
-      final_render.stop_requested = false;
-      final_render.exported = false;
-      controls.status.clear();
-      renderer.detach_pixel_buffer();
-      window->resize_image(final_render.size);
-      renderer.resize(final_render.size.width, final_render.size.height);
-      renderer.attach_pixel_buffer(window->pixel_buffer());
-      camera = rt::Camera(fly_camera.settings(), final_render.size.width, final_render.size.height);
-   };
    const auto advance_final_render = [&] {
-      const bool sample_done = renderer.render_for(camera, kFinalRenderSliceMilliseconds);
-      const auto target = static_cast<std::uint32_t>(final_render.target_samples);
-      if (!sample_done || (renderer.sample_count() < target && !final_render.stop_requested)) {
+      const bool sample_done = renderer.render_for(camera, kSliceMilliseconds);
+      const std::uint32_t samples = renderer.sample_count();
+      if (!sample_done || (!final_render.reached(samples) && !final_render.stop_requested)) {
          return;
       }
-      final_render.state = FinalRender::State::Finished;
-      final_render.end_time = Window::time();
+      final_render.finish(Window::time(), samples);
       renderer.refresh_display();
       if (final_render.export_when_finished) {
          export_image();
@@ -480,45 +295,56 @@ int main(int argc, char** argv) {
          }
          continue;
       }
-      // Redimensionnement de l'aperçu : l'enregistrement CUDA doit être libéré avant qu'OpenGL ne
-      // réalloue le pixel buffer, puis refait sur le nouveau
-      if (!final_render.locked() && size != window->image_size()) {
-         renderer.detach_pixel_buffer();
-         window->resize_image(size);
-         renderer.resize(size.width, size.height);
-         renderer.attach_pixel_buffer(window->pixel_buffer());
-         camera = rt::Camera(fly_camera.settings(), size.width, size.height);
+      if (!final_render.locked()) {
+         const Size image_size = ui.resolution.size(size);
+         if (image_size != window->image_size()) {
+            resize_image(image_size);
+         }
       }
 
       const double now = Window::time();
       const auto delta_time = static_cast<float>(now - last_time);
       last_time = now;
 
-      const PanelResult
-         panel = draw_panel(renderer, controls, fly_camera, window->image_size(), size);
-      handle_shortcuts(*window, renderer, controls);
+      bool camera_changed = draw_scene_panel(ui, renderer, fly_camera, initial_camera, size);
+      const RenderPanelResult panel = draw_render_panel(ui, renderer, window->image_size());
+
+      // Commandes inactives quand l'interface a le focus : saisie, copier-coller…
+      const ImGuiIO& io = ImGui::GetIO();
+      const bool interface_focused = io.WantCaptureKeyboard ||
+                                     ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow);
+      bool export_requested = panel.export_requested;
+      if (!interface_focused) {
+         handle_shortcuts(*window, ui, export_requested);
+      }
       switch (panel.final_render) {
          case FinalRender::Action::Start:
-            start_final_render();
+            renderer.reset();
+            final_render.start(now, 0);
+            ui.status.clear();
+            break;
+         case FinalRender::Action::Continue:
+            final_render.start(now, renderer.sample_count());
+            ui.status.clear();
             break;
          case FinalRender::Action::Stop:
             final_render.stop_requested = true;
             break;
-         case FinalRender::Action::Export:
-            controls.export_requested = true;
-            break;
          case FinalRender::Action::Cancel:
-         case FinalRender::Action::Close:
-            // L'aperçu reprend à la taille de la fenêtre
+            renderer.reset();
             final_render.state = FinalRender::State::Off;
-            controls.status.clear();
+            break;
+         case FinalRender::Action::Close:
+            final_render.state = FinalRender::State::Off;
+            break;
+         case FinalRender::Action::Export:
+            export_requested = true;
             break;
          case FinalRender::Action::None:
             break;
       }
-      if (controls.export_requested) {
+      if (export_requested) {
          export_image();
-         controls.export_requested = false;
       }
 
       if (final_render.state == FinalRender::State::Running) {
@@ -526,16 +352,23 @@ int main(int argc, char** argv) {
       } else if (final_render.state == FinalRender::State::Finished) {
          renderer.refresh_display();
       } else {
-         bool moved = panel.lens_changed;
-         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
-            focus_on_cursor(fly_camera, camera, host_scene, window->cursor_position());
-            moved = true;
+         // Un clic sur l'image rend le clavier à la caméra (ImGui ne le fait que pour le clic
+         // gauche)
+         if (!io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            ImGui::SetWindowFocus(nullptr);
          }
-         const rt::Vec3 direction = movement_direction(*window);
+         if (!io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (const std::optional<CursorPosition> pixel = window->cursor_in_image()) {
+               focus_on_pixel(fly_camera, camera, host_scene, *pixel);
+               camera_changed = true;
+            }
+         }
+         const rt::Vec3 direction = interface_focused ? rt::Vec3{0.0f, 0.0f, 0.0f}
+                                                      : movement_direction(*window);
          if (direction != rt::Vec3{0.0f, 0.0f, 0.0f}) {
-            const float speed = move_speed * (window->is_down(Key::Fast) ? 4.0f : 1.0f);
+            const float speed = ui.move_speed * (window->is_down(Key::Fast) ? 4.0f : 1.0f);
             fly_camera.move(rt::normalize(direction) * (speed * delta_time));
-            moved = true;
+            camera_changed = true;
          }
          const CursorPosition cursor = window->cursor_position();
          if (window->is_looking() && (cursor.x != last_cursor.x || cursor.y != last_cursor.y)) {
@@ -543,13 +376,14 @@ int main(int argc, char** argv) {
                static_cast<float>(cursor.x - last_cursor.x) * kMouseSensitivity,
                static_cast<float>(last_cursor.y - cursor.y) * kMouseSensitivity
             );
-            moved = true;
+            camera_changed = true;
          }
-         if (moved) {
-            camera = rt::Camera(fly_camera.settings(), size.width, size.height);
+         if (camera_changed) {
+            const Size image_size = window->image_size();
+            camera = rt::Camera(fly_camera.settings(), image_size.width, image_size.height);
             renderer.reset();
          }
-         renderer.render(camera);
+         renderer.render_for(camera, kSliceMilliseconds);
       }
       last_cursor = window->cursor_position();
       window->present();

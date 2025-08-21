@@ -1,33 +1,36 @@
 #pragma once
 
-#include "app/window.h"
-
 #include <cstdint>
 #include <string>
 
-// Rendu final : une résolution et un nombre d'échantillons choisis, rendus jusqu'au bout avec la
-// caméra figée, puis exportés
+// Rendu final : un nombre d'échantillons choisi, ou sans limite, rendu avec la caméra et les
+// réglages figés. Il peut être continué une fois terminé.
 struct FinalRender {
    enum class State : std::uint8_t { Off, Running, Finished };
    // Demande faite depuis l'interface
-   enum class Action : std::uint8_t { None, Start, Stop, Cancel, Export, Close };
+   enum class Action : std::uint8_t { None, Start, Stop, Cancel, Continue, Export, Close };
 
    State state = State::Off;
-   int resolution = 1; // préréglage choisi
-   Size custom{1920, 1080};
    int target_samples = 4096;
+   bool unlimited = false;
    bool export_when_finished = true;
 
-   Size size; // du rendu en cours ou terminé
-   double start_time = 0.0;
-   double end_time = 0.0;
+   double run_start = 0.0; // début de la session de rendu en cours, en secondes
+   std::uint32_t run_start_samples = 0;
+   double elapsed_before = 0.0; // durée des sessions terminées
    bool stop_requested = false; // arrêt à la fin de l'échantillon en cours
    bool exported = false;
 
-   // Taille choisie dans l'interface, window : taille actuelle de l'aperçu
-   [[nodiscard]] Size chosen_size(Size window) const;
+   // Début d'un rendu, ou d'une nouvelle session après un rendu terminé (samples : échantillons
+   // déjà accumulés)
+   void start(double now, std::uint32_t samples);
+   // Fin de la session : à la cible atteinte, la cible suivante proposée est le double
+   void finish(double now, std::uint32_t samples);
    // La caméra et les réglages du rendu ne peuvent pas changer
    [[nodiscard]] bool locked() const { return state != State::Off; }
+   // Durée totale de rendu, sessions précédentes comprises
+   [[nodiscard]] double elapsed(double now) const;
+   [[nodiscard]] bool reached(std::uint32_t samples) const;
 };
 
 // Section de l'interface : réglages, progression puis résultat du rendu. samples : échantillons
@@ -35,7 +38,6 @@ struct FinalRender {
 FinalRender::Action draw_final_render(
    FinalRender& render,
    std::uint32_t samples,
-   Size window,
    double now,
    const std::string& status
 );
