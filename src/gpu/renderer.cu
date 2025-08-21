@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -128,11 +129,10 @@ __global__ void average_kernel(
    means.normal[i] = sums.normal[i] * inverse_sample_count;
 }
 
-// Débruitage aux échantillons 1, 2, 4, …, 64, puis tous les 64 : l'image se nettoie vite au
-// début, et le coût reste faible ensuite
-bool is_denoising_step(std::uint32_t sample_count) {
-   return std::has_single_bit(sample_count) || sample_count % 64 == 0;
-}
+// Débruitage aux échantillons 1, 2, 4, 8 et 16, puis espacé selon son coût : il occupe au plus
+// 1 / kDenoiseCostRatio du temps, même en très grande résolution
+constexpr std::uint32_t kEarlyDenoiseSteps = 16;
+constexpr double kDenoiseCostRatio = 20.0;
 
 __device__ unsigned char to_byte(float c) {
    return static_cast<unsigned char>(std::lround(std::fmin(std::fmax(c, 0.0f), 1.0f) * 255.0f));
@@ -357,6 +357,8 @@ struct Renderer::Impl {
    bool denoise = false;
    std::optional<Denoising> denoising;
    std::uint32_t denoised_sample_count = 0; // 0 : pas d'image débruitée depuis le reset
+   std::chrono::steady_clock::time_point last_denoise_end;
+   double last_denoise_seconds = 0.0;
 
    // Échantillon en cours, tracé par tranches de pixels
    std::uint32_t next_slice = 0; // premier pixel de la prochaine tranche
@@ -386,13 +388,29 @@ struct Renderer::Impl {
          pixel_count
       );
       RT_CUDA_CHECK_LAUNCH();
+      const auto start = std::chrono::steady_clock::now();
       denoising->denoiser.denoise(
          denoising->color.data(),
          denoising->albedo.data(),
          denoising->normal.data(),
          denoising->output.data()
       );
+      RT_CUDA_CHECK(cudaDeviceSynchronize());
+      last_denoise_end = std::chrono::steady_clock::now();
+      last_denoise_seconds = std::chrono::duration<double>(last_denoise_end - start).count();
       denoised_sample_count = sample_count;
+   }
+
+   [[nodiscard]] bool is_denoising_step() const {
+      if (denoised_sample_count == 0 ||
+          (sample_count <= kEarlyDenoiseSteps && std::has_single_bit(sample_count))) {
+         return true;
+      }
+      const double since = std::chrono::duration<double>(
+                              std::chrono::steady_clock::now() - last_denoise_end
+      )
+                              .count();
+      return since >= kDenoiseCostRatio * last_denoise_seconds;
    }
 
    [[nodiscard]] bool shows_denoised() const {
@@ -466,7 +484,7 @@ struct Renderer::Impl {
       ++sample_count;
       last_frame = current_sample;
       current_sample = {};
-      if (shows_denoised() && (denoised_sample_count == 0 || is_denoising_step(sample_count))) {
+      if (shows_denoised() && is_denoising_step()) {
          run_denoiser();
       }
       encode();

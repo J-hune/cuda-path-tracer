@@ -104,7 +104,8 @@ public:
    [[nodiscard]] bool caustics() const;
    [[nodiscard]] CausticSettings caustic_settings() const;
 
-   // Débruiteur OptiX sur la couche couleur affichée, relancé à intervalles croissants
+   // Débruiteur OptiX sur la couche couleur affichée, relancé à intervalles croissants selon son
+   // coût
    void set_denoiser(bool enabled);
    [[nodiscard]] bool denoiser() const;
 
